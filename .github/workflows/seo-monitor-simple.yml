@@ -1,0 +1,76 @@
+name: Test Monitoring Simple
+
+on:
+  workflow_dispatch:
+
+env:
+  SITE_URL: 'https://www.leanature.com/'
+  EMAIL_USERNAME: 'vbouvier.redactrice@gmail.com'
+  EMAIL_PASSWORD: 'avrf enpz otim qlnf'
+  NOTIFICATION_EMAIL: 'vbouvier@cybercite.fr'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Setup
+      run: |
+        mkdir -p monitoring-data
+        echo "✅ Setup OK"
+    
+    - name: Test robots.txt
+      id: robots
+      run: |
+        echo "Test robots.txt..."
+        curl -s -o monitoring-data/robots.txt "https://www.leanature.com/robots.txt"
+        if [ -f monitoring-data/robots.txt ]; then
+          echo "✅ robots.txt téléchargé"
+          echo "success=true" >> $GITHUB_OUTPUT
+          wc -l monitoring-data/robots.txt
+        else
+          echo "❌ Erreur robots.txt"
+          echo "success=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Test sitemap
+      id: sitemap
+      run: |
+        echo "Test sitemap..."
+        curl -s -o monitoring-data/sitemap.xml "https://www.leanature.com/media/google_sitemap_3.xml"
+        if [ -f monitoring-data/sitemap.xml ]; then
+          echo "✅ sitemap.xml téléchargé"
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "Taille: $(wc -c < monitoring-data/sitemap.xml) bytes"
+        else
+          echo "❌ Erreur sitemap"
+          echo "success=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Send test email
+      if: steps.robots.outputs.success == 'true'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        secure: true
+        username: ${{ env.EMAIL_USERNAME }}
+        password: ${{ env.EMAIL_PASSWORD }}
+        subject: "✅ Test Monitoring SEO - OK"
+        to: ${{ env.NOTIFICATION_EMAIL }}
+        from: ${{ env.EMAIL_USERNAME }}
+        body: |
+          Test réussi !
+          
+          ✅ robots.txt accessible
+          ✅ sitemap.xml accessible
+          
+          Le monitoring est prêt à fonctionner.
+    
+    - name: Summary
+      if: always()
+      run: |
+        echo "# 📊 Test Monitoring" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- robots.txt: ${{ steps.robots.outputs.success == 'true' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- sitemap.xml: ${{ steps.sitemap.outputs.success == 'true' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY

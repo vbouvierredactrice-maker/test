@@ -2,9 +2,8 @@ name: Monitor SEO Files - Robots.txt & Sitemap.xml
 
 on:
   schedule:
-    # Exécution toutes les 12 heures (à 8h et 20h UTC)
     - cron: '0 8,20 * * *'
-  workflow_dispatch:  # Permet le déclenchement manuel
+  workflow_dispatch:
 
 env:
   SITE_URL: 'https://www.leanature.com/'
@@ -44,7 +43,6 @@ jobs:
         else
           echo "❌ Erreur HTTP $HTTP_STATUS"
           echo "success=false" >> $GITHUB_OUTPUT
-          echo "error_message=Erreur HTTP $HTTP_STATUS pour robots.txt" >> $GITHUB_OUTPUT
         fi
     
     - name: Download current sitemap.xml
@@ -63,7 +61,6 @@ jobs:
         else
           echo "❌ Erreur HTTP $HTTP_STATUS"
           echo "success=false" >> $GITHUB_OUTPUT
-          echo "error_message=Erreur HTTP $HTTP_STATUS pour sitemap.xml" >> $GITHUB_OUTPUT
         fi
     
     - name: Restore previous files from artifacts
@@ -72,7 +69,7 @@ jobs:
       with:
         name: monitoring-history
         path: monitoring-history/
-      continue-on-error: true  # Important : ne pas échouer si l'artifact n'existe pas
+      continue-on-error: true
     
     - name: Check for changes in robots.txt
       id: check_robots_changes
@@ -84,21 +81,6 @@ jobs:
           if ! diff -q monitoring-history/robots_previous.txt monitoring-data/robots_current.txt > /dev/null 2>&1; then
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "📝 Changements détectés dans robots.txt!"
-            
-            # Créer un diff détaillé
-            diff -u monitoring-history/robots_previous.txt monitoring-data/robots_current.txt > monitoring-data/robots_diff.txt || true
-            
-            # Analyser les changements
-            ADDED_LINES=$(grep "^+" monitoring-data/robots_diff.txt | grep -v "^+++" | wc -l || echo 0)
-            REMOVED_LINES=$(grep "^-" monitoring-data/robots_diff.txt | grep -v "^---" | wc -l || echo 0)
-            
-            echo "added_lines=$ADDED_LINES" >> $GITHUB_OUTPUT
-            echo "removed_lines=$REMOVED_LINES" >> $GITHUB_OUTPUT
-            
-            # Extraire des exemples de changements
-            echo "sample_changes<<EOF" >> $GITHUB_OUTPUT
-            grep "^[+-]" monitoring-data/robots_diff.txt | grep -v "^[+-][+-][+-]" | head -10 >> $GITHUB_OUTPUT || true
-            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "✅ Aucun changement dans robots.txt"
@@ -118,23 +100,6 @@ jobs:
           if ! diff -q monitoring-history/sitemap_previous.xml monitoring-data/sitemap_current.xml > /dev/null 2>&1; then
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "📝 Changements détectés dans sitemap.xml!"
-            
-            # Créer un diff détaillé
-            diff -u monitoring-history/sitemap_previous.xml monitoring-data/sitemap_current.xml > monitoring-data/sitemap_diff.txt || true
-            
-            # Compter les URLs ajoutées/supprimées
-            ADDED_URLS=$(grep "^+.*<loc>" monitoring-data/sitemap_diff.txt | wc -l || echo 0)
-            REMOVED_URLS=$(grep "^-.*<loc>" monitoring-data/sitemap_diff.txt | wc -l || echo 0)
-            MODIFIED_DATES=$(grep "^[+-].*<lastmod>" monitoring-data/sitemap_diff.txt | wc -l || echo 0)
-            
-            echo "added_urls=$ADDED_URLS" >> $GITHUB_OUTPUT
-            echo "removed_urls=$REMOVED_URLS" >> $GITHUB_OUTPUT
-            echo "modified_dates=$MODIFIED_DATES" >> $GITHUB_OUTPUT
-            
-            # Extraire des exemples d'URLs
-            echo "sample_urls<<EOF" >> $GITHUB_OUTPUT
-            grep "^[+-].*<loc>" monitoring-data/sitemap_diff.txt | head -5 | sed 's/<[^>]*>//g' | sed 's/^[+-]//' >> $GITHUB_OUTPUT || true
-            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "✅ Aucun changement dans sitemap.xml"
@@ -144,178 +109,91 @@ jobs:
           echo "🆕 Première vérification de sitemap.xml"
         fi
     
-    - name: Debug - Check if email should be sent
-      run: |
-        echo "=== CONDITIONS POUR L'EMAIL ==="
-        echo "robots.txt success: ${{ steps.download_robots.outputs.success }}"
-        echo "sitemap.xml success: ${{ steps.download_sitemap.outputs.success }}"
-        echo "robots.txt changed: ${{ steps.check_robots_changes.outputs.changed }}"
-        echo "sitemap.xml changed: ${{ steps.check_sitemap_changes.outputs.changed }}"
-        
-        # Pour le premier run, on envoie toujours un email de confirmation
-        if [ "${{ steps.check_robots_changes.outputs.changed }}" == "new" ] || [ "${{ steps.check_sitemap_changes.outputs.changed }}" == "new" ]; then
-          echo "🆕 PREMIER RUN - Email de confirmation sera envoyé"
-        fi
-    
-    - name: Send notification email
-      # MODIFIÉ : Envoie aussi lors du premier run
+    - name: Send notification email - Test simple
       if: |
-        steps.download_robots.outputs.success == 'false' ||
-        steps.download_sitemap.outputs.success == 'false' ||
-        steps.check_robots_changes.outputs.changed == 'true' ||
-        steps.check_sitemap_changes.outputs.changed == 'true' ||
         steps.check_robots_changes.outputs.changed == 'new' ||
-        steps.check_sitemap_changes.outputs.changed == 'new'
+        steps.check_sitemap_changes.outputs.changed == 'new' ||
+        steps.check_robots_changes.outputs.changed == 'true' ||
+        steps.check_sitemap_changes.outputs.changed == 'true'
       run: |
-        echo "📧 Préparation de l'email..."
-        python3 << 'EOF'
+        echo "📧 Envoi de l'email de notification..."
+        
+        python3 << 'PYTHON_SCRIPT'
         import smtplib
-        import ssl
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
         from datetime import datetime
-        import os
         
         # Configuration
-        smtp_server = "smtp.gmail.com"
-        port = 587
         sender = "${{ env.EMAIL_USERNAME }}"
         password = "${{ env.EMAIL_PASSWORD }}"
         receiver = "${{ env.NOTIFICATION_EMAIL }}"
         
         print(f"Configuration email:")
-        print(f"  From: {sender}")
-        print(f"  To: {receiver}")
-        print(f"  Server: {smtp_server}:{port}")
+        print(f"  De: {sender}")
+        print(f"  À: {receiver}")
         
-        # Déterminer le type d'alerte
-        is_first_run = "${{ steps.check_robots_changes.outputs.changed }}" == "new" or "${{ steps.check_sitemap_changes.outputs.changed }}" == "new"
-        has_error = "${{ steps.download_robots.outputs.success }}" == "false" or "${{ steps.download_sitemap.outputs.success }}" == "false"
-        has_changes = "${{ steps.check_robots_changes.outputs.changed }}" == "true" or "${{ steps.check_sitemap_changes.outputs.changed }}" == "true"
+        # Créer le message
+        message = MIMEMultipart()
+        message["Subject"] = "📊 Monitoring SEO - Rapport"
+        message["From"] = sender
+        message["To"] = receiver
         
-        if is_first_run:
-            subject = "🚀 Monitoring SEO activé - État initial enregistré"
-        elif has_error:
-            subject = "🚨 [URGENT] Monitoring SEO - Erreurs détectées"
-        else:
-            subject = "📝 Monitoring SEO - Changements détectés"
+        # Corps du message
+        robots_status = "${{ steps.check_robots_changes.outputs.changed }}"
+        sitemap_status = "${{ steps.check_sitemap_changes.outputs.changed }}"
         
-        # Construire le message HTML simplifié
-        html_content = f"""
+        html = f"""
         <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-                h2 {{ color: #34495e; margin-top: 25px; }}
-                .success {{ background: #d4edda; border-left: 4px solid #28a745; padding: 10px; margin: 10px 0; }}
-                .info {{ background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 10px; margin: 10px 0; }}
-                .warning {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 10px 0; }}
-                .error {{ background: #f8d7da; border-left: 4px solid #dc3545; padding: 10px; margin: 10px 0; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>📊 Rapport de Monitoring SEO</h1>
-                <p><strong>Site surveillé :</strong> ${{ env.SITE_URL }}</p>
-                <p><strong>Date :</strong> {datetime.now().strftime("%d/%m/%Y à %H:%M")}</p>
-                
-                <h2>🤖 robots.txt</h2>
-        """
-        
-        # Section robots.txt
-        robots_changed = "${{ steps.check_robots_changes.outputs.changed }}"
-        if "${{ steps.download_robots.outputs.success }}" == "false":
-            html_content += '<div class="error">❌ <strong>ERREUR :</strong> Impossible d\'accéder au fichier</div>'
-        elif robots_changed == "new":
-            html_content += '<div class="info">🆕 <strong>Première vérification</strong> - État initial enregistré</div>'
-        elif robots_changed == "true":
-            html_content += '<div class="warning">📝 <strong>Modifications détectées</strong></div>'
-        else:
-            html_content += '<div class="success">✅ <strong>Aucun changement</strong></div>'
-        
-        # Section sitemap.xml
-        html_content += "<h2>🗺️ sitemap.xml</h2>"
-        
-        sitemap_changed = "${{ steps.check_sitemap_changes.outputs.changed }}"
-        if "${{ steps.download_sitemap.outputs.success }}" == "false":
-            html_content += '<div class="error">❌ <strong>ERREUR :</strong> Impossible d\'accéder au fichier</div>'
-        elif sitemap_changed == "new":
-            html_content += '<div class="info">🆕 <strong>Première vérification</strong> - État initial enregistré</div>'
-        elif sitemap_changed == "true":
-            html_content += '<div class="warning">📝 <strong>Modifications détectées</strong></div>'
-        else:
-            html_content += '<div class="success">✅ <strong>Aucun changement</strong></div>'
-        
-        # Footer
-        html_content += f"""
-                <hr style="margin-top: 30px;">
-                <p style="font-size: 0.9em; color: #666;">
-                    ⏰ Prochaine vérification dans 12 heures<br>
-                    📧 Vous recevrez un email uniquement si des changements sont détectés<br>
-                    🔗 <a href="https://github.com/${{{{ github.repository }}}}/actions">Voir l'historique complet</a>
-                </p>
-            </div>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>📊 Rapport de Monitoring SEO</h2>
+            <p><strong>Site:</strong> ${{ env.SITE_URL }}</p>
+            <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
+            
+            <h3>🤖 robots.txt</h3>
+            <p>Status: {robots_status}</p>
+            
+            <h3>🗺️ sitemap.xml</h3>
+            <p>Status: {sitemap_status}</p>
+            
+            <hr>
+            <p style="color: #666; font-size: 0.9em;">
+                Prochaine vérification dans 12 heures.<br>
+                <a href="https://github.com/${{ github.repository }}/actions">Voir l'historique</a>
+            </p>
         </body>
         </html>
         """
         
-        # Créer le message
-        message = MIMEMultipart("alternative")
-        message["Subject"] = subject
-        message["From"] = sender
-        message["To"] = receiver
-        
-        # Version texte
-        text_content = f"""
-        Rapport de Monitoring SEO
-        Site: ${{ env.SITE_URL }}
-        Date: {datetime.now().strftime("%d/%m/%Y %H:%M")}
-        
-        robots.txt: {robots_changed}
-        sitemap.xml: {sitemap_changed}
-        """
-        
-        part1 = MIMEText(text_content, "plain")
-        part2 = MIMEText(html_content, "html")
-        
-        message.attach(part1)
-        message.attach(part2)
+        message.attach(MIMEText(html, "html"))
         
         # Envoyer l'email
         try:
             print("Connexion au serveur SMTP...")
-            context = ssl.create_default_context()
-            with smtplib.SMTP(smtp_server, port) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.ehlo()
-                print("Authentification...")
-                server.login(sender, password)
-                print("Envoi de l'email...")
-                server.sendmail(sender, receiver, message.as_string())
-            print(f"✅ Email envoyé avec succès à {receiver}")
-        except smtplib.SMTPAuthenticationError as e:
-            print(f"❌ Erreur d'authentification: {e}")
-            print("Vérifiez votre App Password Gmail")
-            exit(1)
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            print("Authentification...")
+            server.login(sender, password)
+            print("Envoi de l'email...")
+            server.sendmail(sender, receiver, message.as_string())
+            server.quit()
+            print("✅ Email envoyé avec succès!")
         except Exception as e:
-            print(f"❌ Erreur lors de l'envoi: {e}")
+            print(f"❌ Erreur: {e}")
             exit(1)
-        EOF
+        PYTHON_SCRIPT
     
     - name: Save current files as history
       if: always()
       run: |
         echo "💾 Sauvegarde des fichiers actuels..."
         
-        if [ -f monitoring-data/robots_current.txt ] && [ "${{ steps.download_robots.outputs.success }}" == "true" ]; then
+        if [ -f monitoring-data/robots_current.txt ]; then
           cp monitoring-data/robots_current.txt monitoring-history/robots_previous.txt
           echo "✅ robots.txt sauvegardé"
         fi
         
-        if [ -f monitoring-data/sitemap_current.xml ] && [ "${{ steps.download_sitemap.outputs.success }}" == "true" ]; then
+        if [ -f monitoring-data/sitemap_current.xml ]; then
           cp monitoring-data/sitemap_current.xml monitoring-history/sitemap_previous.xml
           echo "✅ sitemap.xml sauvegardé"
         fi
@@ -331,17 +209,11 @@ jobs:
     - name: Create summary
       if: always()
       run: |
-        echo "# 📊 Rapport de Monitoring SEO" >> $GITHUB_STEP_SUMMARY
+        echo "# 📊 Monitoring SEO" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Site :** ${{ env.SITE_URL }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Date :** $(date '+%d/%m/%Y %H:%M')" >> $GITHUB_STEP_SUMMARY
+        echo "**Site:** ${{ env.SITE_URL }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Date:** $(date '+%d/%m/%Y %H:%M')" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "## Status" >> $GITHUB_STEP_SUMMARY
-        echo "- robots.txt : ${{ steps.check_robots_changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
-        echo "- sitemap.xml : ${{ steps.check_sitemap_changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        if [ "${{ steps.check_robots_changes.outputs.changed }}" == "new" ] || [ "${{ steps.check_sitemap_changes.outputs.changed }}" == "new" ]; then
-          echo "✉️ **Email de confirmation envoyé**" >> $GITHUB_STEP_SUMMARY
-        fi
+        echo "## Résultats" >> $GITHUB_STEP_SUMMARY
+        echo "- robots.txt: ${{ steps.check_robots_changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
+        echo "- sitemap.xml: ${{ steps.check_sitemap_changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY

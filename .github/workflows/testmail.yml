@@ -1,0 +1,26 @@
+# test_email.py - À exécuter sur votre ordinateur
+import smtplib
+from email.mime.text import MIMEText
+
+# Vos identifiants
+EMAIL = "vbouvier.redactrice@gmail.com"
+PASSWORD = "avrf enpz otim qlnf"  # Sans espaces
+TO = "vbouvier@cybercite.fr"
+
+try:
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.set_debuglevel(1)  # Active les logs détaillés
+    server.starttls()
+    server.login(EMAIL, PASSWORD)
+    
+    msg = MIMEText("Test OK")
+    msg['Subject'] = "Test"
+    msg['From'] = EMAIL
+    msg['To'] = TO
+    
+    server.send_message(msg)
+    server.quit()
+    print("✅ Succès !")
+    
+except Exception as e:
+    print(f"❌ Erreur : {e}")

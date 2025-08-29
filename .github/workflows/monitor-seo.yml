@@ -68,7 +68,7 @@ jobs:
     
     - name: Restore previous files from artifacts
       id: restore_previous
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: monitoring-history
         path: monitoring-history/
@@ -310,7 +310,7 @@ jobs:
     
     - name: Upload history as artifact
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: monitoring-history
         path: monitoring-history/

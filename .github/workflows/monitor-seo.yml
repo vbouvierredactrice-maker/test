@@ -2,21 +2,17 @@ name: Monitor SEO Files (robots.txt & sitemap.xml)
 
 on:
   schedule:
-    # Exécution quotidienne à 8h00 UTC (9h00 heure française en hiver, 10h00 en été)
     - cron: '0 8 * * *'
-  workflow_dispatch: # Permet l'exécution manuelle depuis GitHub
+  workflow_dispatch:
 
 env:
-  # ⚠️ CONFIGURATION À MODIFIER
-  SITE_URL: 'https://www.leanature.com/'  # Remplacez par votre site
-  
-  # Configuration email (⚠️ Attention : données en clair, utilisez un compte dédié)
+  SITE_URL: 'https://www.leanature.com/'
   SMTP_SERVER: 'smtp.gmail.com'
   SMTP_PORT: '587'
-  EMAIL_USERNAME: 'vbouvier.redactrice@gmail.com'  # Remplacez par votre email
-  EMAIL_PASSWORD: 'avrf enpz otim qlnf'  # Pour Gmail, utilisez un mot de passe d'application
-  NOTIFICATION_EMAIL: 'vbouvier@cybercite.fr'  # Email qui recevra les notifications
-  EMAIL_FROM: 'SEO Monitor <vbouvier.redactrice@gmail.com>'  # Email expéditeur
+  EMAIL_USERNAME: 'vbouvier.redactrice@gmail.com'
+  EMAIL_PASSWORD: 'avrf enpz otim qlnf'
+  NOTIFICATION_EMAIL: 'vbouvier@cybercite.fr'
+  EMAIL_FROM: 'SEO Monitor <vbouvier.redactrice@gmail.com>'
 
 jobs:
   monitor:
@@ -40,36 +36,35 @@ jobs:
         echo "🤖 Vérification de robots.txt..."
         ROBOTS_URL="${SITE_URL}robots.txt"
         
-        # Télécharger le fichier avec curl et capturer le code HTTP
-        HTTP_STATUS=$$(curl -s -o monitoring-data/robots_new.txt -w "%{http_code}" -L "$$ROBOTS_URL")
+        # CORRECTION ICI : un seul $ au lieu de $$
+        HTTP_STATUS=$(curl -s -o monitoring-data/robots_new.txt -w "%{http_code}" -L "$ROBOTS_URL")
         
-        echo "status=$$HTTP_STATUS" >> $$GITHUB_OUTPUT
+        echo "status=$HTTP_STATUS" >> $GITHUB_OUTPUT
         echo "HTTP Status: $HTTP_STATUS"
         
         if [ "$HTTP_STATUS" -ne 200 ]; then
           echo "error=true" >> $GITHUB_OUTPUT
-          echo "message=Erreur HTTP $$HTTP_STATUS lors de l'accès à robots.txt" >> $$GITHUB_OUTPUT
+          echo "message=Erreur HTTP $HTTP_STATUS lors de l'accès à robots.txt" >> $GITHUB_OUTPUT
         else
           echo "error=false" >> $GITHUB_OUTPUT
-          # Comparer avec la version précédente si elle existe
+          
           if [ -f monitoring-data/robots_previous.txt ]; then
             if ! diff -u monitoring-data/robots_previous.txt monitoring-data/robots_new.txt > monitoring-data/robots_diff.txt; then
               echo "changed=true" >> $GITHUB_OUTPUT
               echo "📝 Changements détectés dans robots.txt"
               
-              # Analyser les changements
               ADDED_RULES=$(grep "^+" monitoring-data/robots_diff.txt | grep -E "Allow:|Disallow:" | grep -v "^+++" || true)
               REMOVED_RULES=$(grep "^-" monitoring-data/robots_diff.txt | grep -E "Allow:|Disallow:" | grep -v "^---" || true)
               
               if [ -n "$ADDED_RULES" ]; then
                 echo "added_rules<<EOF" >> $GITHUB_OUTPUT
-                echo "$$ADDED_RULES" >> $$GITHUB_OUTPUT
+                echo "$ADDED_RULES" >> $GITHUB_OUTPUT
                 echo "EOF" >> $GITHUB_OUTPUT
               fi
               
               if [ -n "$REMOVED_RULES" ]; then
                 echo "removed_rules<<EOF" >> $GITHUB_OUTPUT
-                echo "$$REMOVED_RULES" >> $$GITHUB_OUTPUT
+                echo "$REMOVED_RULES" >> $GITHUB_OUTPUT
                 echo "EOF" >> $GITHUB_OUTPUT
               fi
             else
@@ -88,180 +83,29 @@ jobs:
         echo "🗺️ Vérification de sitemap.xml..."
         SITEMAP_URL="${SITE_URL}media/google_sitemap_3.xml"
         
-        # Télécharger le fichier avec curl et capturer le code HTTP
-        HTTP_STATUS=$$(curl -s -o monitoring-data/sitemap_new.xml -w "%{http_code}" -L "$$SITEMAP_URL")
+        # CORRECTION ICI : un seul $
+        HTTP_STATUS=$(curl -s -o monitoring-data/sitemap_new.xml -w "%{http_code}" -L "$SITEMAP_URL")
         
-        echo "status=$$HTTP_STATUS" >> $$GITHUB_OUTPUT
+        echo "status=$HTTP_STATUS" >> $GITHUB_OUTPUT
         echo "HTTP Status: $HTTP_STATUS"
         
         if [ "$HTTP_STATUS" -ne 200 ]; then
           echo "error=true" >> $GITHUB_OUTPUT
-          echo "message=Erreur HTTP $$HTTP_STATUS lors de l'accès à sitemap.xml" >> $$GITHUB_OUTPUT
+          echo "message=Erreur HTTP $HTTP_STATUS lors de l'accès à sitemap.xml" >> $GITHUB_OUTPUT
         else
           echo "error=false" >> $GITHUB_OUTPUT
-          # Comparer avec la version précédente si elle existe
+          
           if [ -f monitoring-data/sitemap_previous.xml ]; then
             if ! diff -u monitoring-data/sitemap_previous.xml monitoring-data/sitemap_new.xml > monitoring-data/sitemap_diff.txt; then
               echo "changed=true" >> $GITHUB_OUTPUT
               echo "📝 Changements détectés dans sitemap.xml"
               
-              # Compter les URLs ajoutées/supprimées
               ADDED_URLS=$(grep "^+.*<loc>" monitoring-data/sitemap_diff.txt | wc -l || echo 0)
               REMOVED_URLS=$(grep "^-.*<loc>" monitoring-data/sitemap_diff.txt | wc -l || echo 0)
               
-              echo "added_urls=$$ADDED_URLS" >> $$GITHUB_OUTPUT
-              echo "removed_urls=$$REMOVED_URLS" >> $$GITHUB_OUTPUT
+              echo "added_urls=$ADDED_URLS" >> $GITHUB_OUTPUT
+              echo "removed_urls=$REMOVED_URLS" >> $GITHUB_OUTPUT
               
-              # Extraire quelques exemples d'URLs
               if [ $ADDED_URLS -gt 0 ]; then
                 echo "sample_added<<EOF" >> $GITHUB_OUTPUT
-                grep "^+.*<loc>" monitoring-data/sitemap_diff.txt | head -5 | sed 's/^+.*<loc>//' | sed 's/<\/loc>.*//' >> $GITHUB_OUTPUT
-                echo "EOF" >> $GITHUB_OUTPUT
-              fi
-              
-              if [ $REMOVED_URLS -gt 0 ]; then
-                echo "sample_removed<<EOF" >> $GITHUB_OUTPUT
-                grep "^-.*<loc>" monitoring-data/sitemap_diff.txt | head -5 | sed 's/^-.*<loc>//' | sed 's/<\/loc>.*//' >> $GITHUB_OUTPUT
-                echo "EOF" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "changed=false" >> $GITHUB_OUTPUT
-              echo "✅ Aucun changement dans sitemap.xml"
-            fi
-          else
-            echo "changed=new" >> $GITHUB_OUTPUT
-            echo "🆕 Première vérification de sitemap.xml"
-          fi
-        fi
-
-    - name: Prepare email content
-      id: prepare_email
-      if: |
-        steps.check_robots.outputs.error == 'true' ||
-        steps.check_sitemap.outputs.error == 'true' ||
-        steps.check_robots.outputs.changed == 'true' ||
-        steps.check_sitemap.outputs.changed == 'true'
-      run: |
-        # Déterminer le sujet
-        if [ "$${{ steps.check_robots.outputs.error }}" == "true" ] || [ "$${{ steps.check_sitemap.outputs.error }}" == "true" ]; then
-          echo "subject=🚨 [URGENT] Monitoring SEO - Erreurs détectées sur $${{ env.SITE_URL }}" >> $$GITHUB_OUTPUT
-        else
-          echo "subject=📝 Monitoring SEO - Modifications détectées sur $${{ env.SITE_URL }}" >> $$GITHUB_OUTPUT
-        fi
-        
-        # Créer le contenu HTML de l'email
-        cat > monitoring-data/email.html << 'EOMAIL'
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-            h2 { color: #34495e; margin-top: 30px; }
-            .error { background-color: #fee; border-left: 4px solid #f44336; padding: 10px; margin: 10px 0; }
-            .success { background-color: #efe; border-left: 4px solid #4caf50; padding: 10px; margin: 10px 0; }
-            .warning { background-color: #ffeaa7; border-left: 4px solid #fdcb6e; padding: 10px; margin: 10px 0; }
-            .code-block { background-color: #f5f5f5; border: 1px solid #ddd; padding: 10px; margin: 10px 0; font-family: monospace; white-space: pre-wrap; }
-            .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 0.9em; color: #666; }
-            .stats { background-color: #ecf0f1; padding: 15px; border-radius: 5px; margin: 10px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>📊 Monitoring SEO - Rapport quotidien</h1>
-            <p><strong>Site surveillé :</strong> ${{ env.SITE_URL }}</p>
-            <p><strong>Date :</strong> $(date '+%d/%m/%Y à %H:%M')</p>
-        EOMAIL
-        
-        # Section robots.txt
-        echo "<h2>🤖 robots.txt</h2>" >> monitoring-data/email.html
-        if [ "${{ steps.check_robots.outputs.error }}" == "true" ]; then
-          echo "<div class='error'><strong>❌ ERREUR :</strong> ${{ steps.check_robots.outputs.message }}</div>" >> monitoring-data/email.html
-        elif [ "${{ steps.check_robots.outputs.changed }}" == "true" ]; then
-          echo "<div class='warning'><strong>📝 Modifications détectées</strong></div>" >> monitoring-data/email.html
-          
-          if [ -n "${{ steps.check_robots.outputs.added_rules }}" ]; then
-            echo "<p><strong>➕ Règles ajoutées :</strong></p>" >> monitoring-data/email.html
-            echo "<div class='code-block'>${{ steps.check_robots.outputs.added_rules }}</div>" >> monitoring-data/email.html
-          fi
-          
-          if [ -n "${{ steps.check_robots.outputs.removed_rules }}" ]; then
-            echo "<p><strong>➖ Règles supprimées :</strong></p>" >> monitoring-data/email.html
-            echo "<div class='code-block'>${{ steps.check_robots.outputs.removed_rules }}</div>" >> monitoring-data/email.html
-          fi
-        else
-          echo "<div class='success'>✅ Aucun changement détecté</div>" >> monitoring-data/email.html
-        fi
-        
-        # Section sitemap.xml
-        echo "<h2>🗺️ sitemap.xml</h2>" >> monitoring-data/email.html
-        if [ "${{ steps.check_sitemap.outputs.error }}" == "true" ]; then
-          echo "<div class='error'><strong>❌ ERREUR :</strong> ${{ steps.check_sitemap.outputs.message }}</div>" >> monitoring-data/email.html
-        elif [ "${{ steps.check_sitemap.outputs.changed }}" == "true" ]; then
-          echo "<div class='warning'><strong>📝 Modifications détectées</strong></div>" >> monitoring-data/email.html
-          echo "<div class='stats'>" >> monitoring-data/email.html
-          echo "<p>📈 <strong>URLs ajoutées :</strong> ${{ steps.check_sitemap.outputs.added_urls }}</p>" >> monitoring-data/email.html
-          echo "<p>📉 <strong>URLs supprimées :</strong> ${{ steps.check_sitemap.outputs.removed_urls }}</p>" >> monitoring-data/email.html
-          echo "</div>" >> monitoring-data/email.html
-          
-          if [ -n "${{ steps.check_sitemap.outputs.sample_added }}" ]; then
-            echo "<p><strong>Exemples d'URLs ajoutées :</strong></p>" >> monitoring-data/email.html
-            echo "<div class='code-block'>${{ steps.check_sitemap.outputs.sample_added }}</div>" >> monitoring-data/email.html
-          fi
-          
-          if [ -n "${{ steps.check_sitemap.outputs.sample_removed }}" ]; then
-            echo "<p><strong>Exemples d'URLs supprimées :</strong></p>" >> monitoring-data/email.html
-            echo "<div class='code-block'>${{ steps.check_sitemap.outputs.sample_removed }}</div>" >> monitoring-data/email.html
-          fi
-        else
-          echo "<div class='success'>✅ Aucun changement détecté</div>" >> monitoring-data/email.html
-        fi
-        
-        # Footer
-        cat >> monitoring-data/email.html << 'EOMAIL'
-            <div class="footer">
-              <p>Ce rapport a été généré automatiquement par GitHub Actions.</p>
-              <p><a href="https://github.com/$${{ github.repository }}/actions/runs/$${{ github.run_id }}">Voir les détails complets du workflow</a></p>
-            </div>
-          </div>
-        </body>
-        </html>
-        EOMAIL
-
-    - name: Send email notification
-      if: steps.prepare_email.conclusion == 'success'
-      uses: dawidd6/action-send-mail@v3
-      with:
-        # Configuration du serveur SMTP
-        server_address: ${{ env.SMTP_SERVER }}
-        server_port: ${{ env.SMTP_PORT }}
-        secure: true
-        username: ${{ env.EMAIL_USERNAME }}
-        password: ${{ env.EMAIL_PASSWORD }}
-        # Détails de l'email
-        subject: ${{ steps.prepare_email.outputs.subject }}
-        to: ${{ env.NOTIFICATION_EMAIL }}
-        from: ${{ env.EMAIL_FROM }}
-        html_body: file://monitoring-data/email.html
-        priority: high
-
-    - name: Create summary report
-      if: always()
-      run: |
-        echo "# 📊 Rapport de monitoring SEO" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Site surveillé :** $${{ env.SITE_URL }}" >> $$GITHUB_STEP_SUMMARY
-        echo "**Date :** $$(date '+%d/%m/%Y à %H:%M UTC')" >> $$GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        if [ "${{ steps.prepare_email.conclusion }}" == "success" ]; then
-          echo "✉️ **Email envoyé à :** $${{ env.NOTIFICATION_EMAIL }}" >> $$GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-        fi
-
-    - name: Save current files as previous
-      if: always()
-      run: |
-        # Sauvegarder les fichiers actuels pour la prochaine comparaison
-        if [ -f monitoring-data/robots_new.txt ] && [ "$
+                g

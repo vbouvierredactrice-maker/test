@@ -578,6 +578,9 @@ jobs:
     
     - name: Send detailed email
       if: steps.analyze.outputs.needs_email == 'true'
+      env:
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
       run: |
         python3 << 'PYTHON'
         import smtplib
@@ -624,7 +627,7 @@ jobs:
             <div class="header">
                 <h1>📊 Monitoring SEO Multi-Sites</h1>
                 <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
-                <p><strong>Repository:</strong> ${{ github.repository }}</p>
+             <p><strong>Repository:</strong> {os.environ.get('GITHUB_REPOSITORY', 'N/A')}</p>
             </div>
             
             <div class="summary">
@@ -747,7 +750,7 @@ jobs:
             <div class="footer">
                 <p>
                     <strong>Actions GitHub:</strong> 
-                    <a href="https://github.com/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}">
+                   <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}">
                         Voir les détails complets
                     </a>
                 </p>

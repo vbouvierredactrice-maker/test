@@ -10,7 +10,7 @@ on:
         required: false
         default: ''
       force_alert:
-        description: 'Forcer l\'envoi d\'email même sans changement'
+        description: 'Forcer envoi email même sans changement'
         required: false
         default: 'false'
 

@@ -81,7 +81,7 @@ jobs:
             },
             {
               "name": "Espaces Atypiques",
-              "url": "https://www.espaces-atypiques.com/",
+              "url": "https://www.espaces-atypiques.com/", 
               "robots_path": "robots.txt",
               "sitemaps": ["sitemap_index.xml"],
               "enabled": true

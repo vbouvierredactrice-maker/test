@@ -609,6 +609,12 @@ jobs:
         
         # Corps HTML
         html = f"""
+    <div class="header">
+        <h1>📊 Monitoring SEO Multi-Sites</h1>
+        <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
+        <p><strong>Repository:</strong> {os.environ.get('GITHUB_REPOSITORY', 'N/A')}</p>
+    </div>
+    """
         <html>
         <head>
             <style>
@@ -747,19 +753,16 @@ jobs:
         
         # Footer
         html += f"""
-            <div class="footer">
-                <p>
-                    <strong>Actions GitHub:</strong> 
-                    <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}">
-                        Voir les détails complets
-                    </a>
-                </p>
-                <p>Prochaine vérification automatique dans 12 heures</p>
-                <p><em>Pour désactiver les notifications, modifiez le workflow dans GitHub</em></p>
-            </div>
-        </body>
-        </html>
+    <div class="footer">
+        <p>
+            <strong>Actions GitHub:</strong> 
+            <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}">
+                Voir les détails complets
+            </a>
+        </p>
+    </div>
         """
+      PYTHON
         
         # Envoyer l'email
         message = MIMEMultipart()

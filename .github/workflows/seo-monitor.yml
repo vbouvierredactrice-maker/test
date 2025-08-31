@@ -249,7 +249,7 @@ jobs:
   # MONITORING PARALLÈLE
   # ========================================
   monitor:
-    name: 🔍 ${{ matrix.name }}
+   - name: 🔍 ${{ matrix.name }}
     needs: setup
     runs-on: ubuntu-latest
     strategy:

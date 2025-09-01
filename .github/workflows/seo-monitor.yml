@@ -572,20 +572,20 @@ jobs:
         echo "- **Première vérification:** $FIRST_RUN" >> $GITHUB_STEP_SUMMARY
         echo "- **Avec changements:** $WITH_CHANGES" >> $GITHUB_STEP_SUMMARY
         echo "- **Avec erreurs:** $WITH_ERRORS" >> $GITHUB_STEP_SUMMARY
-    
-  - name: Send detailed email
-  if: steps.analyze.outputs.needs_email == 'true'
-  env:
-    GITHUB_REPOSITORY: ${{ github.repository }}
-    GITHUB_RUN_ID: ${{ github.run_id }}
-  run: |
-    python3 << 'PYTHON'
-    import smtplib
-    import json
-    import os
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    from datetime import datetime
+
+    - name: Send detailed email
+      if: steps.analyze.outputs.needs_email == 'true'
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+      run: |
+        python3 << 'PYTHON'
+        import smtplib
+        import json
+        import os
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        from datetime import datetime
         
         sender = "${{ env.EMAIL_USERNAME }}"
         password = "${{ env.EMAIL_PASSWORD }}"

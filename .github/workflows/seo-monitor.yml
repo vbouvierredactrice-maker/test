@@ -1,4 +1,4 @@
-name: Monitor SEO Multi-Sites - Fixed
+name: Monitor SEO Multi-Sites
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
         required: false
         default: ''
       force_alert:
-        description: 'Forcer envoi email même sans changement'
+        description: 'Forcer envoi email'
         required: false
         default: 'false'
 
@@ -20,11 +20,8 @@ env:
   NOTIFICATION_EMAIL: 'vbouvier@cybercite.fr'
 
 jobs:
-  # ========================================
-  # CONFIGURATION DES SITES
-  # ========================================
   setup:
-  - name: Configuration
+    name: Configuration
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -81,7 +78,7 @@ jobs:
             },
             {
               "name": "Espaces Atypiques",
-              "url": "https://www.espaces-atypiques.com/", 
+              "url": "https://www.espaces-atypiques.com/",
               "robots_path": "robots.txt",
               "sitemaps": ["sitemap_index.xml"],
               "enabled": true
@@ -115,7 +112,7 @@ jobs:
               "enabled": true
             },
             {
-              "name": "Le Voyage à Nantes",
+              "name": "Le Voyage a Nantes",
               "url": "https://www.levoyageanantes.fr/",
               "robots_path": "robots.txt",
               "sitemaps": ["sitemap_index.xml"],
@@ -204,7 +201,7 @@ jobs:
               "enabled": true
             },
             {
-              "name": "Tom & Co",
+              "name": "Tom and Co",
               "url": "https://www.tomandco.com/",
               "robots_path": "robots.txt",
               "sitemaps": [
@@ -243,7 +240,7 @@ jobs:
         echo "matrix={\"include\":$FILTERED}" >> $GITHUB_OUTPUT
         COUNT=$(echo "$FILTERED" | jq '. | length')
         echo "count=$COUNT" >> $GITHUB_OUTPUT
-        echo "📊 $COUNT sites configurés"
+        echo "$COUNT sites configurés"
 
   # ========================================
   # MONITORING PARALLÈLE

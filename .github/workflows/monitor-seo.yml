@@ -20,227 +20,418 @@ env:
   NOTIFICATION_EMAIL: 'vbouvier@cybercite.fr'
 
 jobs:
-  # [Garder toutes les sections setup et monitor identiques jusqu'à notify]
-  
-  notify:
-    name: 📧 Notification
-    needs: [setup, monitor]
+  # ========================================
+  # CONFIGURATION DES SITES
+  # ========================================
+  setup:
+    name: 📋 Configuration
     runs-on: ubuntu-latest
-    if: always()
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      sites_count: ${{ steps.set-matrix.outputs.count }}
     
     steps:
-    - name: Download all reports
+    - name: Configure sites matrix
+      id: set-matrix
+      run: |
+        SITES_JSON=$(cat << 'EOF'
+        {
+          "sites": [
+            {
+              "name": "Brown Shipley",
+              "url": "https://brownshipley.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["en-gb/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Orange Caraibe",
+              "url": "https://caraibe.orange.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Recrutement FHSJ",
+              "url": "https://recrutement-fhsj.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Assuropoil",
+              "url": "https://www.assuropoil.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Avoriaz",
+              "url": "https://www.avoriaz.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Domicile Clean",
+              "url": "https://www.domicile-clean.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Espaces Atypiques",
+              "url": "https://www.espaces-atypiques.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Hopital Marie Lannelongue",
+              "url": "https://www.hopitalmarielannelongue.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "HPSJ",
+              "url": "https://www.hpsj.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "InsingerGilissen",
+              "url": "https://www.insingergilissen.nl/",
+              "robots_path": "nl-nl/robots.txt",
+              "sitemaps": ["nl-nl/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "International Patient Paris",
+              "url": "https://www.international-patient-paris.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Le Voyage à Nantes",
+              "url": "https://www.levoyageanantes.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Macoretz",
+              "url": "https://www.macoretz.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Merck Finck",
+              "url": "https://www.merckfinck.de/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["de-de/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "NDBS",
+              "url": "https://www.ndbs.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Pharmapets BE",
+              "url": "https://www.pharmapets.be/",
+              "robots_path": "robots.txt",
+              "sitemaps": [
+                "media/sitemaps/pharmapets_be/sitemap_nl_product.xml",
+                "media/sitemaps/pharmapets_be/sitemap_fr_product.xml"
+              ],
+              "enabled": true
+            },
+            {
+              "name": "Pharmapets NL",
+              "url": "https://www.pharmapets.nl/",
+              "robots_path": "robots.txt",
+              "sitemaps": [
+                "media/sitemaps/pharmapets_nl/sitemap_product.xml"
+              ],
+              "enabled": true
+            },
+            {
+              "name": "Puilaetco",
+              "url": "https://www.puilaetco.be/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["fr-be/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Quintet COM",
+              "url": "https://www.quintet.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["en-gb/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Quintet LU",
+              "url": "https://www.quintet.lu/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["en-lu/sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Royan Atlantique",
+              "url": "https://www.royanatlantique.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap_index.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Sayse",
+              "url": "https://www.sayse.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Terre de Marins",
+              "url": "https://www.terredemarins.fr/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["1_fr_0_sitemap.xml"],
+              "enabled": true
+            },
+            {
+              "name": "Tom & Co",
+              "url": "https://www.tomandco.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": [
+                "media/sitemaps/tomandco/sitemap_tc_benl_product.xml",
+                "media/sitemaps/tomandco/sitemap_tc_befr_product.xml"
+              ],
+              "enabled": true
+            },
+            {
+              "name": "Vetostore",
+              "url": "https://www.vetostore.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": [
+                "media/sitemaps/vetostore/sitemap_product.xml"
+              ],
+              "enabled": true
+            },
+            {
+              "name": "Lea Nature",
+              "url": "https://www.leanature.com/",
+              "robots_path": "robots.txt",
+              "sitemaps": ["media/google_sitemap_3.xml"],
+              "enabled": true
+            }
+          ]
+        }
+        EOF
+        )
+        
+        if [ -n "${{ github.event.inputs.site_filter }}" ]; then
+          FILTERED=$(echo "$SITES_JSON" | jq -c --arg filter "${{ github.event.inputs.site_filter }}" '.sites | map(select(.name | test($filter; "i")) | select(.enabled == true))')
+        else
+          FILTERED=$(echo "$SITES_JSON" | jq -c '.sites | map(select(.enabled == true))')
+        fi
+        
+        echo "matrix={\"include\":$FILTERED}" >> $GITHUB_OUTPUT
+        COUNT=$(echo "$FILTERED" | jq '. | length')
+        echo "count=$COUNT" >> $GITHUB_OUTPUT
+        echo "📊 $COUNT sites configurés"
+
+  # ========================================
+  # MONITORING PARALLÈLE
+  # ========================================
+  monitor:
+    name: 🔍 ${{ matrix.name }}
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+      max-parallel: 5
+      fail-fast: false
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup
+      run: |
+        SAFE_NAME=$(echo "${{ matrix.name }}" | sed 's/[^a-zA-Z0-9]/_/g' | tr '[:upper:]' '[:lower:]')
+        echo "SAFE_NAME=${SAFE_NAME}" >> $GITHUB_ENV
+        mkdir -p "data/${SAFE_NAME}"
+        mkdir -p "history/${SAFE_NAME}"
+        mkdir -p "changes/${SAFE_NAME}"
+    
+    - name: Download robots.txt
+      id: robots
+      run: |
+        URL="${{ matrix.url }}${{ matrix.robots_path }}"
+        echo "📥 Robots.txt: $URL"
+        
+        HTTP_STATUS=$(curl -s -o "data/${SAFE_NAME}/robots.txt" -w "%{http_code}" -L "$URL" \
+          -H "User-Agent: Mozilla/5.0 (compatible; SEOMonitor/1.0)" \
+          --max-time 30)
+        
+        if [ "$HTTP_STATUS" -eq 200 ]; then
+          echo "✅ OK ($(wc -l < data/${SAFE_NAME}/robots.txt) lignes)"
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Erreur HTTP $HTTP_STATUS"
+          echo "status=error" >> $GITHUB_OUTPUT
+          echo "error=HTTP $HTTP_STATUS" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Download sitemaps
+      id: sitemaps
+      run: |
+        echo "📥 Téléchargement des sitemaps..."
+        ALL_SUCCESS=true
+        ERRORS=""
+        
+        echo '${{ toJson(matrix.sitemaps) }}' | jq -r '.[]' | while IFS= read -r sitemap; do
+          URL="${{ matrix.url }}${sitemap}"
+          FILENAME=$(echo "$sitemap" | sed 's/\//_/g')
+          
+          echo "  → $URL"
+          HTTP_STATUS=$(curl -s -o "data/${SAFE_NAME}/sitemap_${FILENAME}" -w "%{http_code}" -L "$URL" \
+            -H "User-Agent: Mozilla/5.0 (compatible; SEOMonitor/1.0)" \
+            --max-time 30)
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "    ✅ OK ($(wc -c < data/${SAFE_NAME}/sitemap_${FILENAME}) bytes)"
+          else
+            echo "    ❌ Erreur HTTP $HTTP_STATUS"
+            ALL_SUCCESS=false
+            ERRORS="${ERRORS}${sitemap}:${HTTP_STATUS};"
+          fi
+        done
+        
+        if [ "$ALL_SUCCESS" = true ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "status=error" >> $GITHUB_OUTPUT
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Restore history
+      id: restore
       uses: actions/download-artifact@v4
       with:
-        pattern: report-*
-        path: reports/
+        name: history-${{ env.SAFE_NAME }}
+        path: history/${{ env.SAFE_NAME }}/
+      continue-on-error: true
     
-    - name: Analyze and prepare notification
-      id: analyze
+    - name: Check for changes
+      id: changes
       run: |
-        echo "📊 Analyse des rapports..."
+        echo "🔍 Analyse des changements..."
         
-        TOTAL="${{ needs.setup.outputs.sites_count }}"
-        FIRST_RUN=0
-        WITH_CHANGES=0
-        WITH_ERRORS=0
-        NEEDS_EMAIL=false
+        IS_FIRST_RUN=false
+        HAS_CHANGES=false
+        CHANGES_DETAILS=""
         
-        for report_dir in reports/report-*; do
-          if [ -f "$report_dir/report.json" ]; then
-            REPORT=$(cat "$report_dir/report.json")
-            
-            IS_FIRST=$(echo "$REPORT" | jq -r '.is_first_run')
-            HAS_CHANGES=$(echo "$REPORT" | jq -r '.changes.has_changes')
-            ROBOTS_ERROR=$(echo "$REPORT" | jq -r '.robots.status')
-            SITEMAP_ERROR=$(echo "$REPORT" | jq -r '.sitemaps.status')
-            
-            if [ "$IS_FIRST" = "true" ]; then
-              FIRST_RUN=$((FIRST_RUN + 1))
-            elif [ "$HAS_CHANGES" = "true" ]; then
-              WITH_CHANGES=$((WITH_CHANGES + 1))
-              NEEDS_EMAIL=true
+        if [ "${{ steps.restore.outcome }}" != "success" ] || [ ! -f "history/${SAFE_NAME}/robots.txt" ]; then
+          IS_FIRST_RUN=true
+          echo "🆕 Première vérification pour ce site"
+        fi
+        
+        if [ -f "data/${SAFE_NAME}/robots.txt" ]; then
+          if [ "$IS_FIRST_RUN" = false ] && [ -f "history/${SAFE_NAME}/robots.txt" ]; then
+            if ! diff -q "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > /dev/null; then
+              HAS_CHANGES=true
+              echo "📝 Changements détectés dans robots.txt"
+              
+              diff -u "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > "changes/${SAFE_NAME}/robots_diff.txt" || true
+              
+              ADDED_LINES=$(grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | wc -l || echo 0)
+              REMOVED_LINES=$(grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | wc -l || echo 0)
+              
+              CHANGES_DETAILS="${CHANGES_DETAILS}robots.txt:modified($ADDED_LINES+/$REMOVED_LINES-);"
             fi
+          fi
+        fi
+        
+        for sitemap_file in data/${SAFE_NAME}/sitemap_*; do
+          if [ -f "$sitemap_file" ]; then
+            BASENAME=$(basename "$sitemap_file")
             
-            if [ "$ROBOTS_ERROR" = "error" ] || [ "$SITEMAP_ERROR" = "error" ]; then
-              WITH_ERRORS=$((WITH_ERRORS + 1))
-              NEEDS_EMAIL=true
-            fi
-            
-            if [ -f "$report_dir/changes.tar.gz" ]; then
-              mkdir -p "all_changes/$(basename $report_dir)"
-              tar -xzf "$report_dir/changes.tar.gz" -C "all_changes/$(basename $report_dir)"
+            if [ "$IS_FIRST_RUN" = false ] && [ -f "history/${SAFE_NAME}/$BASENAME" ]; then
+              if ! diff -q "$sitemap_file" "history/${SAFE_NAME}/$BASENAME" > /dev/null; then
+                HAS_CHANGES=true
+                echo "📝 Changements dans $BASENAME"
+                CHANGES_DETAILS="${CHANGES_DETAILS}${BASENAME}:modified;"
+              fi
             fi
           fi
         done
         
-        if [ "${{ github.event.inputs.force_alert }}" = "true" ]; then
-          NEEDS_EMAIL=true
+        if [ "$IS_FIRST_RUN" = true ]; then
+          echo "is_first_run=true" >> $GITHUB_OUTPUT
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        else
+          echo "is_first_run=false" >> $GITHUB_OUTPUT
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_OUTPUT
+        fi
+        echo "details=$CHANGES_DETAILS" >> $GITHUB_OUTPUT
+    
+    - name: Create report
+      id: report
+      run: |
+        cat << EOF > "data/${SAFE_NAME}/report.json"
+        {
+          "site": "${{ matrix.name }}",
+          "url": "${{ matrix.url }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "is_first_run": ${{ steps.changes.outputs.is_first_run }},
+          "robots": {
+            "status": "${{ steps.robots.outputs.status }}",
+            "error": "${{ steps.robots.outputs.error }}"
+          },
+          "sitemaps": {
+            "status": "${{ steps.sitemaps.outputs.status }}",
+            "errors": "${{ steps.sitemaps.outputs.errors }}"
+          },
+          "changes": {
+            "has_changes": ${{ steps.changes.outputs.has_changes }},
+            "details": "${{ steps.changes.outputs.details }}"
+          }
+        }
+        EOF
+    
+    - name: Save history
+      if: always()
+      run: |
+        if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ "${{ steps.robots.outputs.status }}" = "success" ]; then
+          cp "data/${SAFE_NAME}/robots.txt" "history/${SAFE_NAME}/robots.txt"
         fi
         
-        echo "first_run=$FIRST_RUN" >> $GITHUB_OUTPUT
-        echo "with_changes=$WITH_CHANGES" >> $GITHUB_OUTPUT
-        echo "with_errors=$WITH_ERRORS" >> $GITHUB_OUTPUT
-        echo "needs_email=$NEEDS_EMAIL" >> $GITHUB_OUTPUT
-        
-        echo "# 📊 Monitoring SEO - Résumé" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **Sites surveillés:** $TOTAL" >> $GITHUB_STEP_SUMMARY
-        echo "- **Première vérification:** $FIRST_RUN" >> $GITHUB_STEP_SUMMARY
-        echo "- **Avec changements:** $WITH_CHANGES" >> $GITHUB_STEP_SUMMARY
-        echo "- **Avec erreurs:** $WITH_ERRORS" >> $GITHUB_STEP_SUMMARY
+        for sitemap in data/${SAFE_NAME}/sitemap_*; do
+          if [ -f "$sitemap" ]; then
+            cp "$sitemap" "history/${SAFE_NAME}/"
+          fi
+        done
     
-    - name: Send detailed email
-      if: steps.analyze.outputs.needs_email == 'true'
-      env:
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_RUN_ID: ${{ github.run_id }}
-      run: |
-        python3 << 'PYTHON'
-        import smtplib
-        import json
-        import os
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        from datetime import datetime
-        
-        sender = "${{ env.EMAIL_USERNAME }}"
-        password = "${{ env.EMAIL_PASSWORD }}"
-        receiver = "${{ env.NOTIFICATION_EMAIL }}"
-        
-        total = int("${{ needs.setup.outputs.sites_count }}")
-        first_run = int("${{ steps.analyze.outputs.first_run }}")
-        with_changes = int("${{ steps.analyze.outputs.with_changes }}")
-        with_errors = int("${{ steps.analyze.outputs.with_errors }}")
-        
-        if with_errors > 0:
-            subject = f"🚨 SEO Alert - {with_errors} erreur(s) / {total} sites"
-        elif with_changes > 0:
-            subject = f"📝 SEO Update - {with_changes} changement(s) / {total} sites"
-        else:
-            subject = f"✅ SEO Check - {total} sites vérifiés"
-        
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
-                .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
-                .summary {{ background: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 5px; }}
-                .site {{ margin: 20px 0; padding: 15px; border-left: 4px solid #007bff; background: #f9f9f9; }}
-                .site-error {{ border-left-color: #dc3545; background: #f8d7da; }}
-                .site-changed {{ border-left-color: #ffc107; background: #fff3cd; }}
-                .changes-detail {{ background: white; padding: 10px; margin: 10px 0; border-radius: 3px; font-family: monospace; font-size: 12px; }}
-                .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.9em; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>📊 Monitoring SEO Multi-Sites</h1>
-                <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
-                <p><strong>Repository:</strong> {os.environ.get('GITHUB_REPOSITORY', 'N/A')}</p>
-            </div>
-            
-            <div class="summary">
-                <h2>Résumé</h2>
-                <ul>
-                    <li><strong>Sites surveillés:</strong> {total}</li>
-                    <li><strong>Première vérification:</strong> {first_run}</li>
-                    <li><strong>Avec changements:</strong> {with_changes}</li>
-                    <li><strong>Avec erreurs:</strong> {with_errors}</li>
-                </ul>
-            </div>
-            
-            <h2>Détails par site</h2>
-        """
-        
-        for report_dir in os.listdir("reports"):
-            if report_dir.startswith("report-"):
-                report_path = os.path.join("reports", report_dir, "report.json")
-                if os.path.exists(report_path):
-                    with open(report_path) as f:
-                        report = json.load(f)
-                    
-                    if report['is_first_run']:
-                        continue
-                    
-                    if report['robots']['status'] == 'error' or report['sitemaps']['status'] == 'error':
-                        site_class = 'site-error'
-                        icon = '❌'
-                    elif report['changes']['has_changes']:
-                        site_class = 'site-changed'
-                        icon = '📝'
-                    else:
-                        continue
-                    
-                    html += f'<div class="{site_class}">'
-                    html += f'<h3>{icon} {report["site"]}</h3>'
-                    html += f'<p><strong>URL:</strong> <a href="{report["url"]}">{report["url"]}</a></p>'
-                    
-                    if report['robots']['status'] == 'error':
-                        html += f'<p>⚠️ <strong>robots.txt:</strong> {report["robots"]["error"]}</p>'
-                    
-                    if report['sitemaps']['status'] == 'error':
-                        html += f'<p>⚠️ <strong>sitemaps:</strong> {report["sitemaps"]["errors"]}</p>'
-                    
-                    if report['changes']['has_changes'] and report['changes']['details']:
-                        html += '<div class="changes-detail">'
-                        html += '<strong>Changements détectés:</strong><br>'
-                        
-                        details = report['changes']['details']
-                        for change in details.split(';'):
-                            if change:
-                                parts = change.split(':')
-                                if len(parts) == 2:
-                                    file_name = parts[0]
-                                    change_info = parts[1]
-                                    
-                                    if 'modified' in change_info and '(' in change_info:
-                                        nums = change_info[change_info.find('(')+1:change_info.find(')')].split('/')
-                                        if len(nums) == 2:
-                                            added = nums[0].replace('+', '')
-                                            removed = nums[1].replace('-', '')
-                                            
-                                            if file_name == 'robots.txt':
-                                                html += f'<br>📄 <strong>robots.txt:</strong> '
-                                                html += f'{added} lignes ajoutées, {removed} lignes supprimées'
-                                            elif 'sitemap' in file_name:
-                                                html += f'<br>🗺️ <strong>{file_name}:</strong> '
-                                                html += f'{added} URLs ajoutées, {removed} URLs supprimées'
-                        
-                        html += '</div>'
-                    
-                    html += '</div>'
-        
-        html += f"""
-            <div class="footer">
-                <p>
-                    <strong>Actions GitHub:</strong> 
-                    <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}">
-                        Voir les détails complets
-                    </a>
-                </p>
-                <p>Prochaine vérification automatique dans 12 heures</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        message = MIMEMultipart()
-        message["Subject"] = subject
-        message["From"] = sender
-        message["To"] = receiver
-        message.attach(MIMEText(html, "html"))
-        
-        try:
-            server = smtplib.SMTP('smtp.gmail.com', 587)
-            server.starttls()
-            server.login(sender, password)
-            server.sendmail(sender, receiver, message.as_string())
-            server.quit()
-            print(f"✅ Email envoyé à {receiver}")
-            print(f"   Sujet: {subject}")
-        except Exception as e:
-            print(f"❌ Erreur envoi email: {e}")
-            exit(1)
-        PYTHON
+    - name: Upload history
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: history-${{ env.SAFE_NAME }}
+        path: history/${{ env.SAFE_NAME }}/
+        retention-days: 30
+    
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: report-${{ env.SAFE_NAME }}
+        path: data/${{ env.SAFE_NAME }}/report.json
+        retention-days: 7
+
+  # [Gardez la section notify comme dans ma réponse précédente]

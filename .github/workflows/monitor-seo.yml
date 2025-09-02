@@ -189,7 +189,6 @@ jobs:
             {
               "name": "Sayse",
               "url": "https://www.sayse.fr/",
-              "robots_path": "robots.txt",
               "sitemaps": ["sitemap.xml"],
               "enabled": true
             },

@@ -695,99 +695,115 @@ jobs:
                         with open(report_path) as f:
                             report = json.load(f)
                         
-                        # Déterminer le type de site
-                        if report['is_first_run']:
-                            continue  # Ne pas afficher les premières vérifications
+                        # Déterminer le statut du site
+                        has_errors = (report['robots']['status'] == 'error' or report['sitemaps']['status'] == 'error')
+                        has_changes = (report['changes']['has_changes'] == True)
+                        is_first_run = report['is_first_run']
                         
-                        if report['robots']['status'] == 'error' or report['sitemaps']['status'] == 'error':
-                            site_class = 'site-error'
-                            icon = '❌'
-                        elif report['changes']['has_changes']:
-                            site_class = 'site-changed'
-                            icon = '📝'
-                        else:
-                            continue  # Ne pas afficher les sites sans changement
-                        
-                        # Afficher le site avec problème
-                        html += f'<div class="{site_class}">'
-                        html += f'<h3>{icon} {report["site"]}</h3>'
-                        html += f'<p><strong>URL:</strong> <a href="{report["url"]}">{report["url"]}</a></p>'
-                        
-                        # Détails des erreurs
-                        if report['robots']['status'] == 'error':
-                            html += f'<p>⚠️ <strong>robots.txt:</strong> {report["robots"]["error"]}</p>'
-                        
-                        if report['sitemaps']['status'] == 'error':
-                            html += f'<p>⚠️ <strong>sitemaps:</strong> {report["sitemaps"]["errors"]}</p>'
-                        
-                        # Détails des changements
-                        if report['changes']['has_changes'] and report['changes']['details']:
-                            html += '<div class="changes-detail">'
-                            html += '<strong>Changements détectés:</strong><br>'
+                        # Afficher si : erreurs OU changements (même en première exécution)
+                        if has_errors or (has_changes and not is_first_run):
+                            # Déterminer le style et l'icône
+                            if has_errors:
+                                if is_first_run:
+                                    site_class = 'site-error'
+                                    icon = '🚨'  # Erreur lors de la première vérification
+                                else:
+                                    site_class = 'site-error' 
+                                    icon = '❌'  # Erreur lors d'une vérification normale
+                            elif has_changes:
+                                site_class = 'site-changed'
+                                icon = '📝'
                             
-                            # Parser les détails
-                            details = report['changes']['details']
-                            for change in details.split(';'):
-                                if change:
-                                    parts = change.split(':')
-                                    if len(parts) == 2:
-                                        file_name = parts[0]
-                                        change_info = parts[1]
-                                        
-                                        # Extraire les nombres
-                                        if 'modified' in change_info and '(' in change_info:
-                                            nums = change_info[change_info.find('(')+1:change_info.find(')')].split('/')
-                                            if len(nums) == 2:
-                                                added = nums[0].replace('+', '')
-                                                removed = nums[1].replace('-', '')
-                                                
-                                                if file_name == 'robots.txt':
-                                                    html += f'<br>📄 <strong>robots.txt:</strong> '
-                                                    html += f'{added} lignes ajoutées, {removed} lignes supprimées'
-                                                elif 'sitemap' in file_name:
-                                                    html += f'<br>🗺️ <strong>{file_name}:</strong> '
-                                                    html += f'{added} URLs ajoutées, {removed} URLs supprimées'
+                            # Afficher le site
+                            html += f'<div class="{site_class}">'
+                            if is_first_run and has_errors:
+                                html += f'<h3>{icon} {report["site"]} <span style="color: #6c757d; font-size: 0.8em;">(Première vérification)</span></h3>'
+                            else:
+                                html += f'<h3>{icon} {report["site"]}</h3>'
+                            html += f'<p><strong>URL:</strong> <a href="{report["url"]}">{report["url"]}</a></p>'
                             
-                            # Lire les détails si disponibles
-                            changes_dir = f"all_changes/report-{report['site'].replace(' ', '_').lower()}"
-                            if os.path.exists(changes_dir):
-                                # Détails robots.txt
-                                robots_changes = os.path.join(changes_dir, "robots_changes.txt")
-                                if os.path.exists(robots_changes):
-                                    with open(robots_changes) as f:
-                                        content = f.read()
-                                        if '=== AJOUTS ===' in content:
-                                            adds = content.split('=== AJOUTS ===')[1].split('=== SUPPRESSIONS ===')[0].strip()
-                                            if adds:
-                                                html += '<br><br><strong>Lignes ajoutées dans robots.txt:</strong><br>'
-                                                for line in adds.split('\\n')[:5]:
-                                                    if line.strip():
-                                                        html += f'<code>+ {line}</code><br>'
-                                        
-                                        if '=== SUPPRESSIONS ===' in content:
-                                            dels = content.split('=== SUPPRESSIONS ===')[1].strip()
-                                            if dels:
-                                                html += '<br><strong>Lignes supprimées dans robots.txt:</strong><br>'
-                                                for line in dels.split('\\n')[:5]:
-                                                    if line.strip():
-                                                        html += f'<code>- {line}</code><br>'
+                            # Détails des erreurs (TOUJOURS afficher, même en première exécution)
+                            if report['robots']['status'] == 'error':
+                                error_msg = report['robots'].get('error', 'Erreur inconnue')
+                                html += f'<p>⚠️ <strong>robots.txt:</strong> {error_msg}</p>'
+                            
+                            if report['sitemaps']['status'] == 'error':
+                                error_msg = report['sitemaps'].get('errors', 'Erreur inconnue')
+                                html += f'<p>⚠️ <strong>sitemaps:</strong> {error_msg}</p>'
+                            
+                            # Détails des changements (seulement si pas première exécution)
+                            if has_changes and not is_first_run and report['changes']['details']:
+                                html += '<div class="changes-detail">'
+                                html += '<strong>Changements détectés:</strong><br>'
                                 
-                                # Détails sitemaps
-                                for sitemap_changes in os.listdir(changes_dir):
-                                    if sitemap_changes.endswith('_changes.txt') and 'sitemap' in sitemap_changes:
-                                        with open(os.path.join(changes_dir, sitemap_changes)) as f:
+                                # Parser les détails
+                                details = report['changes']['details']
+                                for change in details.split(';'):
+                                    if change:
+                                        parts = change.split(':')
+                                        if len(parts) == 2:
+                                            file_name = parts[0]
+                                            change_info = parts[1]
+                                            
+                                            # Extraire les nombres
+                                            if 'modified' in change_info and '(' in change_info:
+                                                nums = change_info[change_info.find('(')+1:change_info.find(')')].split('/')
+                                                if len(nums) == 2:
+                                                    added = nums[0].replace('+', '')
+                                                    removed = nums[1].replace('-', '')
+                                                    
+                                                    if file_name == 'robots.txt':
+                                                        html += f'<br>📄 <strong>robots.txt:</strong> '
+                                                        html += f'{added} lignes ajoutées, {removed} lignes supprimées'
+                                                    elif 'sitemap' in file_name:
+                                                        html += f'<br>🗺️ <strong>{file_name}:</strong> '
+                                                        html += f'{added} URLs ajoutées, {removed} URLs supprimées'
+                                
+                                # Lire les détails des changements si disponibles
+                                changes_dir = f"all_changes/report-{report['site'].replace(' ', '_').lower()}"
+                                if os.path.exists(changes_dir):
+                                    # Détails robots.txt
+                                    robots_changes = os.path.join(changes_dir, "robots_changes.txt")
+                                    if os.path.exists(robots_changes):
+                                        with open(robots_changes) as f:
                                             content = f.read()
-                                            if '=== NOUVELLES URLS ===' in content:
-                                                urls = content.split('=== NOUVELLES URLS ===')[1].split('===')[0].strip()
-                                                if urls:
-                                                    html += f'<br><strong>Nouvelles URLs dans {sitemap_changes.replace("_changes.txt", "")}:</strong><br>'
-                                                    for url in urls.split('\\n')[:3]:
-                                                        if url.strip():
-                                                            html += f'<code>+ {url}</code><br>'
+                                            if '=== AJOUTS ===' in content:
+                                                adds = content.split('=== AJOUTS ===')[1].split('=== SUPPRESSIONS ===')[0].strip()
+                                                if adds:
+                                                    html += '<br><br><strong>Lignes ajoutées dans robots.txt:</strong><br>'
+                                                    for line in adds.split('\n')[:5]:
+                                                        if line.strip():
+                                                            html += f'<code>+ {line.strip()}</code><br>'
+                                            
+                                            if '=== SUPPRESSIONS ===' in content:
+                                                dels = content.split('=== SUPPRESSIONS ===')[1].strip()
+                                                if dels:
+                                                    html += '<br><strong>Lignes supprimées dans robots.txt:</strong><br>'
+                                                    for line in dels.split('\n')[:5]:
+                                                        if line.strip():
+                                                            html += f'<code>- {line.strip()}</code><br>'
+                                    
+                                    # Détails sitemaps
+                                    for sitemap_changes in os.listdir(changes_dir):
+                                        if sitemap_changes.endswith('_changes.txt') and 'sitemap' in sitemap_changes:
+                                            with open(os.path.join(changes_dir, sitemap_changes)) as f:
+                                                content = f.read()
+                                                if '=== NOUVELLES URLS ===' in content:
+                                                    urls = content.split('=== NOUVELLES URLS ===')[1].split('===')[0].strip()
+                                                    if urls:
+                                                        sitemap_name = sitemap_changes.replace('_changes.txt', '').replace('sitemap_', '')
+                                                        html += f'<br><strong>Nouvelles URLs dans {sitemap_name}:</strong><br>'
+                                                        for url in urls.split('\n')[:3]:
+                                                            if url.strip():
+                                                                html += f'<code>+ {url.strip()}</code><br>'
+                                
+                                html += '</div>'
                             
                             html += '</div>'
-                        
-                        html += '</div>'
+                            
+            # Si aucun site n'a été affiché mais qu'il y a des erreurs/changements dans les stats
+            if (with_errors > 0 or with_changes > 0) and '</div>' not in html.split('<h2>Détails par site</h2>')[-1]:
+                html += '<p><em>Détails en cours d\'analyse ou non disponibles pour cette exécution.</em></p>'
         else:
             html += '<p><em>Aucun rapport disponible pour cette exécution.</em></p>'
         

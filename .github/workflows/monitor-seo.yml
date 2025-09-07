@@ -325,62 +325,47 @@ jobs:
       id: setup_state
       run: |
         echo "🔄 Initialisation de l'état..."
-        
-        # Créer les dossiers nécessaires
         mkdir -p "history/${SAFE_NAME}"
-        mkdir -p "temp_history"
         
-        # Tentative de récupération de l'historique via l'API GitHub
+        # Vérifier si un artifact historique existe via l'API
         echo "📡 Recherche d'historique existant..."
-        
-        # Récupérer la liste des artifacts récents
         ARTIFACTS_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
           "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?per_page=100" || echo '{"artifacts":[]}')
         
-        # Chercher notre artifact spécifique
-        ARTIFACT_ID=$(echo "$ARTIFACTS_RESPONSE" | jq -r --arg name "history-${SAFE_NAME}" \
+        ARTIFACT_EXISTS=$(echo "$ARTIFACTS_RESPONSE" | jq -r --arg name "history-${SAFE_NAME}" \
           '.artifacts[] | select(.name == $name and .expired == false) | .id' | head -1)
         
-        if [ "$ARTIFACT_ID" != "" ] && [ "$ARTIFACT_ID" != "null" ]; then
-          echo "📂 Artifact historique trouvé (ID: $ARTIFACT_ID)"
-          
-          # Télécharger l'artifact directement via l'API
-          DOWNLOAD_URL=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" \
-            -w "%{url_effective}" -o "temp_history/history.zip")
-          
-          if [ -f "temp_history/history.zip" ] && [ -s "temp_history/history.zip" ]; then
-            cd temp_history
-            unzip -q history.zip 2>/dev/null || echo "Erreur extraction"
-            cd ..
-            
-            # Copier les fichiers extraits
-            if [ -d "temp_history" ]; then
-              cp -r temp_history/* "history/${SAFE_NAME}/" 2>/dev/null || true
-            fi
-            
-            echo "✅ Historique restauré avec succès"
-            echo "has_history=true" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ Échec du téléchargement de l'historique"
-            echo "has_history=false" >> $GITHUB_OUTPUT
-          fi
+        if [ "$ARTIFACT_EXISTS" != "" ] && [ "$ARTIFACT_EXISTS" != "null" ]; then
+          echo "📂 Artifact historique trouvé (ID: $ARTIFACT_EXISTS)"
+          echo "has_history=true" >> $GITHUB_OUTPUT
         else
           echo "🆕 Aucun historique trouvé - première exécution"
           echo "has_history=false" >> $GITHUB_OUTPUT
         fi
-        
-        # Nettoyer les fichiers temporaires
-        rm -rf temp_history
+    
+    - name: Download history artifact
+      if: steps.setup_state.outputs.has_history == 'true'
+      id: download_history
+      uses: actions/download-artifact@v4
+      with:
+        name: history-${{ env.SAFE_NAME }}
+        path: history/${{ env.SAFE_NAME }}/
+      continue-on-error: true
     
     - name: Determine execution type
       id: execution_type
       run: |
-        if [ "${{ steps.setup_state.outputs.has_history }}" = "true" ] && [ -f "history/${SAFE_NAME}/robots.txt" ]; then
-          echo "📊 Historique valide trouvé"
+        # Vérifier si l'historique a été correctement récupéré
+        if [ "${{ steps.setup_state.outputs.has_history }}" = "true" ] && \
+           [ "${{ steps.download_history.outcome }}" = "success" ] && \
+           [ -f "history/${SAFE_NAME}/.last_check" ]; then
+          echo "📊 Historique valide trouvé et restauré"
           echo "is_first_run=false" >> $GITHUB_OUTPUT
         else
-          echo "🆕 Première exécution (pas d'historique valide)"
+          echo "🆕 Traiter comme première exécution"
+          if [ "${{ steps.setup_state.outputs.has_history }}" = "true" ]; then
+            echo "   (artifact existe mais téléchargement échoué)"
+          fi
           echo "is_first_run=true" >> $GITHUB_OUTPUT
         fi
     

@@ -322,42 +322,58 @@ jobs:
         mkdir -p "history/${SAFE_NAME}"
         
         echo "Recherche et récupération de l'historique..."
+        echo "Site: ${{ matrix.name }} -> SAFE_NAME: ${SAFE_NAME}"
         
-        # Récupérer les 5 derniers runs complétés
-        RECENT_RUNS=$(gh run list --repo ${{ github.repository }} --workflow="Monitor SEO Multi-Sites" --status completed --limit 5 --json number --jq '.[].number')
+        # Récupérer les 5 derniers runs complétés sans spécifier le workflow
+        RECENT_RUNS=$(gh run list --repo ${{ github.repository }} --status completed --limit 5 --json number --jq '.[].number')
         
         HISTORY_FOUND=false
         
         for run_number in $RECENT_RUNS; do
-          echo "Vérification du run #$run_number..."
+          echo "=== Vérification du run #$run_number ==="
           
-          # Télécharger l'artifact s'il existe
+          # Lister tous les artifacts de ce run pour diagnostic
+          echo "Artifacts disponibles dans le run #$run_number:"
+          gh run view "$run_number" --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name' || echo "Aucun artifact listé"
+          
+          # Essayer de télécharger notre artifact spécifique
+          echo "Recherche de: history-${SAFE_NAME}"
           if gh run download "$run_number" --repo ${{ github.repository }} --name "history-${SAFE_NAME}" --dir "temp_history_${run_number}" 2>/dev/null; then
-            echo "Historique trouvé dans le run #$run_number"
+            echo "SUCCESS: Historique trouvé dans le run #$run_number"
             
             # Copier les fichiers vers le dossier history
             if [ -d "temp_history_${run_number}" ]; then
+              echo "Contenu du dossier téléchargé:"
+              ls -la "temp_history_${run_number}/" || echo "Dossier vide"
+              
               cp -r temp_history_${run_number}/* "history/${SAFE_NAME}/" 2>/dev/null || true
               rm -rf "temp_history_${run_number}"
               
               # Vérifier que nous avons bien récupéré l'historique
               if [ -f "history/${SAFE_NAME}/.last_check" ]; then
-                echo "Historique restauré avec succès"
+                echo "SUCCESS: Historique restauré avec succès"
                 HISTORY_FOUND=true
                 break
+              else
+                echo "WARNING: Historique téléchargé mais pas de fichier .last_check"
               fi
+            else
+              echo "WARNING: Dossier temp_history_${run_number} introuvable"
             fi
+          else
+            echo "SKIP: Artifact history-${SAFE_NAME} non trouvé dans run #$run_number"
           fi
           
           # Nettoyer le dossier temporaire si il existe
           rm -rf "temp_history_${run_number}" 2>/dev/null || true
+          echo ""
         done
         
         # Résultat final
         if [ "$HISTORY_FOUND" = "true" ]; then
-          echo "has_history=true" >> $GITHUB_OUTPUT
+          echo "RESULT: has_history=true" >> $GITHUB_OUTPUT
         else
-          echo "Aucun historique trouvé - première exécution"
+          echo "RESULT: Aucun historique trouvé - première exécution"
           echo "has_history=false" >> $GITHUB_OUTPUT
         fi
     

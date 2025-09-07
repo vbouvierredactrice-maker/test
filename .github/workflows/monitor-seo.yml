@@ -323,30 +323,40 @@ jobs:
         
         echo "Recherche et récupération de l'historique..."
         
-        if gh run list --repo ${{ github.repository }} --workflow="Monitor SEO Multi-Sites" --status completed --limit 10 --json workflowDatabaseId,number,conclusion | \
-           jq -r '.[].number' | head -5 | while read -r run_number; do
-          
+        # Récupérer les 5 derniers runs complétés
+        RECENT_RUNS=$(gh run list --repo ${{ github.repository }} --workflow="Monitor SEO Multi-Sites" --status completed --limit 5 --json number --jq '.[].number')
+        
+        HISTORY_FOUND=false
+        
+        for run_number in $RECENT_RUNS; do
           echo "Vérification du run #$run_number..."
           
+          # Télécharger l'artifact s'il existe
           if gh run download "$run_number" --repo ${{ github.repository }} --name "history-${SAFE_NAME}" --dir "temp_history_${run_number}" 2>/dev/null; then
             echo "Historique trouvé dans le run #$run_number"
             
+            # Copier les fichiers vers le dossier history
             if [ -d "temp_history_${run_number}" ]; then
               cp -r temp_history_${run_number}/* "history/${SAFE_NAME}/" 2>/dev/null || true
               rm -rf "temp_history_${run_number}"
               
+              # Vérifier que nous avons bien récupéré l'historique
               if [ -f "history/${SAFE_NAME}/.last_check" ]; then
                 echo "Historique restauré avec succès"
-                echo "has_history=true" >> $GITHUB_OUTPUT
+                HISTORY_FOUND=true
                 break
               fi
             fi
           fi
           
+          # Nettoyer le dossier temporaire si il existe
           rm -rf "temp_history_${run_number}" 2>/dev/null || true
         done
         
-        if [ ! -f "history/${SAFE_NAME}/.last_check" ]; then
+        # Résultat final
+        if [ "$HISTORY_FOUND" = "true" ]; then
+          echo "has_history=true" >> $GITHUB_OUTPUT
+        else
           echo "Aucun historique trouvé - première exécution"
           echo "has_history=false" >> $GITHUB_OUTPUT
         fi

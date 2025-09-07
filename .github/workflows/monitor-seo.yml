@@ -388,19 +388,85 @@ jobs:
       run: |
         echo "🔍 Analyse des changements..."
         
-        IS_FIRST_RUN="${{ steps.setup_state.outputs.is_first_run }}"
+        IS_FIRST_RUN="${{ steps.execution_type.outputs.is_first_run }}"
         HAS_CHANGES=false
         CHANGES_DETAILS=""
         
         if [ "$IS_FIRST_RUN" = "true" ]; then
           echo "🆕 Première vérification pour ce site"
-          echo "📝 Note: La détection de changements sera active à partir de la prochaine exécution"
         else
           echo "📊 Comparaison avec l'historique..."
           
-          # Analyser robots.txt (comparaison sera implémentée dans une future version)
-          echo "⚠️ Comparaison d'historique temporairement désactivée"
-          echo "🔄 En attente d'une solution robuste pour les artifacts"
+          # Analyser robots.txt
+          if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ -f "history/${SAFE_NAME}/robots.txt" ]; then
+            if ! diff -q "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > /dev/null; then
+              HAS_CHANGES=true
+              echo "📝 Changements détectés dans robots.txt"
+              
+              # Créer un diff détaillé
+              diff -u "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > "changes/${SAFE_NAME}/robots_diff.txt" || true
+              
+              # Analyser les changements
+              ADDED_LINES=$(grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | wc -l || echo 0)
+              REMOVED_LINES=$(grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | wc -l || echo 0)
+              
+              # Extraire les règles modifiées
+              echo "### ROBOTS.TXT CHANGES ###" > "changes/${SAFE_NAME}/robots_changes.txt"
+              echo "Lignes ajoutées: $ADDED_LINES" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              echo "Lignes supprimées: $REMOVED_LINES" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              echo "" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              echo "=== AJOUTS ===" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | head -20 >> "changes/${SAFE_NAME}/robots_changes.txt" || true
+              echo "" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              echo "=== SUPPRESSIONS ===" >> "changes/${SAFE_NAME}/robots_changes.txt"
+              grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | head -20 >> "changes/${SAFE_NAME}/robots_changes.txt" || true
+              
+              CHANGES_DETAILS="${CHANGES_DETAILS}robots.txt:modified($ADDED_LINES+/$REMOVED_LINES-);"
+            fi
+          fi
+          
+          # Analyser chaque sitemap
+          for sitemap_file in data/${SAFE_NAME}/sitemap_*; do
+            if [ -f "$sitemap_file" ]; then
+              BASENAME=$(basename "$sitemap_file")
+              
+              if [ -f "history/${SAFE_NAME}/$BASENAME" ]; then
+                if ! diff -q "$sitemap_file" "history/${SAFE_NAME}/$BASENAME" > /dev/null; then
+                  HAS_CHANGES=true
+                  echo "📝 Changements dans $BASENAME"
+                  
+                  # Analyser les URLs pour les sitemaps XML
+                  if [[ "$BASENAME" == *".xml" ]]; then
+                    # Extraire les URLs avant/après
+                    grep -o '<loc>[^<]*</loc>' "history/${SAFE_NAME}/$BASENAME" 2>/dev/null | sed 's/<[^>]*>//g' | sort > "/tmp/old_urls.txt" || touch "/tmp/old_urls.txt"
+                    grep -o '<loc>[^<]*</loc>' "$sitemap_file" | sed 's/<[^>]*>//g' | sort > "/tmp/new_urls.txt"
+                    
+                    # Compter les différences
+                    ADDED_URLS=$(comm -13 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | wc -l)
+                    REMOVED_URLS=$(comm -23 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | wc -l)
+                    
+                    # Sauvegarder les détails
+                    echo "### $BASENAME CHANGES ###" > "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    echo "URLs ajoutées: $ADDED_URLS" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    echo "URLs supprimées: $REMOVED_URLS" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    echo "" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    
+                    if [ $ADDED_URLS -gt 0 ]; then
+                      echo "=== NOUVELLES URLS ===" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                      comm -13 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | head -10 >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    fi
+                    
+                    if [ $REMOVED_URLS -gt 0 ]; then
+                      echo "=== URLS SUPPRIMÉES ===" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                      comm -23 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | head -10 >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    fi
+                    
+                    CHANGES_DETAILS="${CHANGES_DETAILS}${BASENAME}:modified($ADDED_URLS+/$REMOVED_URLS-);"
+                  fi
+                fi
+              fi
+            fi
+          done
         fi
         
         # Output

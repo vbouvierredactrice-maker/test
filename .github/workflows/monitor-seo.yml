@@ -549,13 +549,16 @@ jobs:
     needs: [setup, monitor]
     runs-on: ubuntu-latest
     if: always()
+    permissions:
+      contents: write
+      actions: read
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 0
+        fetch-depth: 1
     
     - name: Download all reports
       uses: actions/download-artifact@v4
@@ -564,19 +567,34 @@ jobs:
         path: reports/
       continue-on-error: true
     
-    - name: Rebuild SEO history from reports
+    - name: Rebuild SEO history from current data
       run: |
-        echo "Reconstruction de l'historique SEO depuis les rapports..."
+        echo "Reconstruction de l'historique SEO..."
         
-        # Créer le dossier d'historique
+        # Créer le dossier d'historique s'il n'existe pas
         mkdir -p .seo-history
+        
+        # Créer un fichier README pour expliquer le dossier
+        cat > .seo-history/README.md << 'EOF'
+        # SEO History
+        
+        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+        
+        Structure:
+        - Chaque sous-dossier correspond à un site surveillé
+        - `.last_check` : timestamp de la dernière vérification
+        - `robots.txt` : dernière version du fichier robots.txt
+        - `sitemap_*.xml` : derniers sitemaps téléchargés
+        
+        Généré automatiquement par GitHub Actions.
+        EOF
         
         # Traiter chaque rapport pour reconstruire l'historique de chaque site
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
             # Extraire le nom du site depuis le nom du dossier
             SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
-            echo "Traitement de: $SITE_DIR"
+            echo "Préparation historique pour: $SITE_DIR"
             
             # Créer le dossier d'historique pour ce site
             mkdir -p ".seo-history/${SITE_DIR}"
@@ -584,18 +602,20 @@ jobs:
             # Créer le marker avec timestamp
             echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
             
-            # Note: Les fichiers robots.txt et sitemaps seront ajoutés par chaque job monitor
-            # Ici on s'assure juste que la structure existe
+            # Ajouter une note d'information
+            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
           fi
         done
+        
+        echo "Structure d'historique créée"
     
     - name: Commit and push history
       run: |
-        echo "Commit des changements d'historique..."
+        echo "Vérification des changements Git..."
         
         # Configurer Git
-        git config --local user.email "action@github.com"
-        git config --local user.name "SEO Monitor Bot"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
         
         # Ajouter tous les fichiers d'historique
         git add .seo-history/
@@ -604,13 +624,22 @@ jobs:
         if git diff --staged --quiet; then
           echo "Aucun changement d'historique à commiter"
         else
-          # Compter les sites modifiés
-          MODIFIED_SITES=$(git diff --staged --name-only .seo-history/ | cut -d'/' -f2 | sort -u | wc -l)
+          echo "Changements détectés, commit en cours..."
           
-          git commit -m "Update SEO history for $MODIFIED_SITES sites - $(date -u +%Y-%m-%d_%H:%M:%S)"
-          git push
-          
-          echo "Historique committé et poussé pour $MODIFIED_SITES sites"
+          # Commit avec gestion d'erreur
+          if git commit -m "Update SEO history structure - $(date -u +%Y-%m-%d_%H:%M:%S)"; then
+            echo "Commit réussi, tentative de push..."
+            
+            # Push avec gestion d'erreur
+            if git push; then
+              echo "Push réussi - historique sauvegardé"
+            else
+              echo "Erreur lors du push, mais le commit local est effectué"
+              exit 0  # Ne pas faire échouer le workflow
+            fi
+          else
+            echo "Aucun changement réel à commiter"
+          fi
         fi
 
   notify:

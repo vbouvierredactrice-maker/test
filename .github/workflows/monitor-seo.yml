@@ -315,48 +315,25 @@ jobs:
     
     - name: Setup initial state and restore history
       id: setup_state
-      env:
-        GH_TOKEN: ${{ github.token }}
       run: |
         echo "Initialisation de l'état..."
         mkdir -p "history/${SAFE_NAME}"
         
-        echo "Recherche et récupération de l'historique pour: ${SAFE_NAME}"
+        echo "Vérification de l'historique Git local..."
         
-        # Récupérer les 10 derniers runs complétés
-        RECENT_RUNS=$(gh run list --repo ${{ github.repository }} --status completed --limit 10 --json number --jq '.[].number')
-        
-        HISTORY_FOUND=false
-        
-        for run_number in $RECENT_RUNS; do
-          echo "Test run #$run_number..."
+        if [ -d ".seo-history/${SAFE_NAME}" ]; then
+          echo "Historique Git local trouvé pour ${SAFE_NAME}"
+          cp -r .seo-history/${SAFE_NAME}/* "history/${SAFE_NAME}/" 2>/dev/null || true
           
-          # Essayer directement de télécharger l'artifact
-          if gh run download "$run_number" --repo ${{ github.repository }} --name "history-${SAFE_NAME}" --dir "temp_${run_number}" >/dev/null 2>&1; then
-            echo "Historique trouvé dans run #$run_number"
-            
-            # Vérifier et copier les fichiers
-            if [ -d "temp_${run_number}" ] && [ "$(ls -A temp_${run_number} 2>/dev/null)" ]; then
-              cp -r temp_${run_number}/* "history/${SAFE_NAME}/" 2>/dev/null || true
-              
-              # Vérifier la restauration
-              if [ -f "history/${SAFE_NAME}/.last_check" ] || [ -f "history/${SAFE_NAME}/robots.txt" ]; then
-                echo "Historique restauré avec succès"
-                HISTORY_FOUND=true
-                rm -rf "temp_${run_number}"
-                break
-              fi
-            fi
-            
-            rm -rf "temp_${run_number}"
+          if [ -f "history/${SAFE_NAME}/.last_check" ] || [ -f "history/${SAFE_NAME}/robots.txt" ]; then
+            echo "Historique restauré avec succès depuis Git local"
+            echo "has_history=true" >> $GITHUB_OUTPUT
+          else
+            echo "Dossier d'historique vide dans Git local"
+            echo "has_history=false" >> $GITHUB_OUTPUT
           fi
-        done
-        
-        # Résultat final
-        if [ "$HISTORY_FOUND" = "true" ]; then
-          echo "has_history=true" >> $GITHUB_OUTPUT
         else
-          echo "Aucun historique trouvé - première exécution"
+          echo "Aucun historique Git local trouvé - première exécution"
           echo "has_history=false" >> $GITHUB_OUTPUT
         fi
     
@@ -492,18 +469,18 @@ jobs:
         
         echo "needs_alert=$NEEDS_ALERT" >> $GITHUB_OUTPUT
     
-    - name: Save history
+    - name: Save history to Git
       if: always()
       run: |
-        echo "Sauvegarde de l'état actuel..."
+        echo "Sauvegarde de l'état actuel dans Git..."
         
-        mkdir -p "history/${SAFE_NAME}"
+        mkdir -p ".seo-history/${SAFE_NAME}"
         
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "history/${SAFE_NAME}/.last_check"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SAFE_NAME}/.last_check"
         
         if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ "${{ steps.robots.outputs.status }}" = "success" ]; then
-          cp "data/${SAFE_NAME}/robots.txt" "history/${SAFE_NAME}/robots.txt"
-          echo "robots.txt sauvegardé"
+          cp "data/${SAFE_NAME}/robots.txt" ".seo-history/${SAFE_NAME}/robots.txt"
+          echo "robots.txt sauvegardé dans Git"
         else
           echo "robots.txt non sauvegardé (erreur: ${{ steps.robots.outputs.status }})"
         fi
@@ -511,27 +488,18 @@ jobs:
         SITEMAP_COUNT=0
         for sitemap in data/${SAFE_NAME}/sitemap_*; do
           if [ -f "$sitemap" ]; then
-            cp "$sitemap" "history/${SAFE_NAME}/"
+            cp "$sitemap" ".seo-history/${SAFE_NAME}/"
             SITEMAP_COUNT=$((SITEMAP_COUNT + 1))
           fi
         done
-        echo "$SITEMAP_COUNT sitemaps sauvegardés"
+        echo "$SITEMAP_COUNT sitemaps sauvegardés dans Git"
         
-        if [ -f "history/${SAFE_NAME}/.last_check" ]; then
-          echo "Dossier historique prêt pour upload"
-          ls -la "history/${SAFE_NAME}/"
-        else
-          echo "Problème avec la création du dossier historique"
-        fi
-    
-    - name: Upload history
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: history-${{ env.SAFE_NAME }}
-        path: history/${{ env.SAFE_NAME }}/
-        retention-days: 30
-        if-no-files-found: ignore
+        git config --local user.email "action@github.com"
+        git config --local user.name "SEO Monitor Bot"
+        
+        git add ".seo-history/${SAFE_NAME}/"
+        
+        echo "Historique Git préparé pour ${SAFE_NAME}"
     
     - name: Upload report and changes
       if: always()
@@ -571,10 +539,8 @@ jobs:
       run: |
         echo "Reconstruction de l'historique SEO..."
         
-        # Créer le dossier d'historique s'il n'existe pas
         mkdir -p .seo-history
         
-        # Créer un fichier README pour expliquer le dossier
         cat > .seo-history/README.md << 'EOF'
         # SEO History
         
@@ -589,128 +555,53 @@ jobs:
         Généré automatiquement par GitHub Actions.
         EOF
         
-        # Traiter chaque rapport pour reconstruire l'historique de chaque site
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
-            # Extraire le nom du site depuis le nom du dossier
             SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
             echo "Préparation historique pour: $SITE_DIR"
             
-            # Créer le dossier d'historique pour ce site
             mkdir -p ".seo-history/${SITE_DIR}"
             
-            # Créer le marker avec timestamp
             echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
             
-            # Ajouter une note d'information
-            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
-          fi
-        done
-        
-        echo "Structure d'historique créée"
-    
-  commit_history:
-    name: Commit History
-    needs: [setup, monitor]
-    runs-on: ubuntu-latest
-    if: always()
-    permissions:
-      contents: write
-      actions: read
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
-    
-    - name: Download all reports
-      uses: actions/download-artifact@v4
-      with:
-        pattern: report-*
-        path: reports/
-      continue-on-error: true
-    
-    - name: Rebuild SEO history from current data
-      run: |
-        echo "Reconstruction de l'historique SEO..."
-        
-        # Créer le dossier d'historique s'il n'existe pas
-        mkdir -p .seo-history
-        
-        # Créer un fichier README pour expliquer le dossier
-        cat > .seo-history/README.md << 'EOF'
-        # SEO History
-        
-        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
-        
-        Structure:
-        - Chaque sous-dossier correspond à un site surveillé
-        - `.last_check` : timestamp de la dernière vérification
-        - `robots.txt` : dernière version du fichier robots.txt
-        - `sitemap_*.xml` : derniers sitemaps téléchargés
-        
-        Généré automatiquement par GitHub Actions.
-        EOF
-        
-        # Traiter chaque rapport pour reconstruire l'historique de chaque site
-        for report_dir in reports/report-*; do
-          if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
-            # Extraire le nom du site depuis le nom du dossier
-            SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
-            echo "Préparation historique pour: $SITE_DIR"
-            
-            # Créer le dossier d'historique pour ce site
-            mkdir -p ".seo-history/${SITE_DIR}"
-            
-            # Créer le marker avec timestamp
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
-            
-            # Ajouter une note d'information
             echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
           fi
         done
         
         echo "Structure d'historique créée localement"
     
-    - name: Commit and push history with sync
+    - name: Commit and push history
       run: |
         echo "Synchronisation et commit de l'historique..."
         
-        # Configurer Git
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
-        # Synchroniser avec la branche distante avant de commiter
         echo "Synchronisation avec la branche distante..."
         git fetch origin
         git rebase origin/main || {
-          echo "Conflit détecté, tentative de résolution automatique..."
+          echo "Conflit détecté, résolution automatique..."
           git rebase --abort
           git reset --hard origin/main
           echo "Reset effectué, reconstruction de l'historique..."
         }
         
-        # Reconstruire l'historique après sync
         mkdir -p .seo-history
         
-        # Créer/Mettre à jour le README
         cat > .seo-history/README.md << 'EOF'
-# SEO History
+        # SEO History
+        
+        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+        
+        Structure:
+        - Chaque sous-dossier correspond à un site surveillé
+        - `.last_check` : timestamp de la dernière vérification
+        - `robots.txt` : dernière version du fichier robots.txt
+        - `sitemap_*.xml` : derniers sitemaps téléchargés
+        
+        Généré automatiquement par GitHub Actions.
+        EOF
 
-Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
-
-Structure:
-- Chaque sous-dossier correspond à un site surveillé
-- `.last_check` : timestamp de la dernière vérification
-- `robots.txt` : dernière version du fichier robots.txt
-- `sitemap_*.xml` : derniers sitemaps téléchargés
-
-Généré automatiquement par GitHub Actions.
-EOF
-
-        # Recréer l'historique pour tous les sites
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
             SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
@@ -720,21 +611,17 @@ EOF
           fi
         done
         
-        # Ajouter tous les fichiers d'historique
         git add .seo-history/
         
-        # Vérifier s'il y a des changements à commiter
         if git diff --staged --quiet; then
           echo "Aucun changement d'historique à commiter après sync"
         else
           echo "Changements détectés après sync, commit en cours..."
           
-          # Commit avec message unique basé sur timestamp
           TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
           if git commit -m "Update SEO history structure - ${TIMESTAMP}"; then
             echo "Commit réussi, tentative de push..."
             
-            # Push avec retry en cas d'échec
             MAX_RETRIES=3
             RETRY_COUNT=0
             

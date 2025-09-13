@@ -544,9 +544,78 @@ jobs:
         retention-days: 7
         if-no-files-found: ignore
 
+  commit_history:
+    name: Commit History
+    needs: [setup, monitor]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Download all reports
+      uses: actions/download-artifact@v4
+      with:
+        pattern: report-*
+        path: reports/
+      continue-on-error: true
+    
+    - name: Rebuild SEO history from reports
+      run: |
+        echo "Reconstruction de l'historique SEO depuis les rapports..."
+        
+        # Créer le dossier d'historique
+        mkdir -p .seo-history
+        
+        # Traiter chaque rapport pour reconstruire l'historique de chaque site
+        for report_dir in reports/report-*; do
+          if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
+            # Extraire le nom du site depuis le nom du dossier
+            SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
+            echo "Traitement de: $SITE_DIR"
+            
+            # Créer le dossier d'historique pour ce site
+            mkdir -p ".seo-history/${SITE_DIR}"
+            
+            # Créer le marker avec timestamp
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
+            
+            # Note: Les fichiers robots.txt et sitemaps seront ajoutés par chaque job monitor
+            # Ici on s'assure juste que la structure existe
+          fi
+        done
+    
+    - name: Commit and push history
+      run: |
+        echo "Commit des changements d'historique..."
+        
+        # Configurer Git
+        git config --local user.email "action@github.com"
+        git config --local user.name "SEO Monitor Bot"
+        
+        # Ajouter tous les fichiers d'historique
+        git add .seo-history/
+        
+        # Vérifier s'il y a des changements à commiter
+        if git diff --staged --quiet; then
+          echo "Aucun changement d'historique à commiter"
+        else
+          # Compter les sites modifiés
+          MODIFIED_SITES=$(git diff --staged --name-only .seo-history/ | cut -d'/' -f2 | sort -u | wc -l)
+          
+          git commit -m "Update SEO history for $MODIFIED_SITES sites - $(date -u +%Y-%m-%d_%H:%M:%S)"
+          git push
+          
+          echo "Historique committé et poussé pour $MODIFIED_SITES sites"
+        fi
+
   notify:
     name: Notification
-    needs: [setup, monitor]
+    needs: [setup, monitor, commit_history]
     runs-on: ubuntu-latest
     if: always()
     

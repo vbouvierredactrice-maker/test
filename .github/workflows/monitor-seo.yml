@@ -609,36 +609,160 @@ jobs:
         
         echo "Structure d'historique créée"
     
-    - name: Commit and push history
+  commit_history:
+    name: Commit History
+    needs: [setup, monitor]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: write
+      actions: read
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    
+    - name: Download all reports
+      uses: actions/download-artifact@v4
+      with:
+        pattern: report-*
+        path: reports/
+      continue-on-error: true
+    
+    - name: Rebuild SEO history from current data
       run: |
-        echo "Vérification des changements Git..."
+        echo "Reconstruction de l'historique SEO..."
+        
+        # Créer le dossier d'historique s'il n'existe pas
+        mkdir -p .seo-history
+        
+        # Créer un fichier README pour expliquer le dossier
+        cat > .seo-history/README.md << 'EOF'
+        # SEO History
+        
+        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+        
+        Structure:
+        - Chaque sous-dossier correspond à un site surveillé
+        - `.last_check` : timestamp de la dernière vérification
+        - `robots.txt` : dernière version du fichier robots.txt
+        - `sitemap_*.xml` : derniers sitemaps téléchargés
+        
+        Généré automatiquement par GitHub Actions.
+        EOF
+        
+        # Traiter chaque rapport pour reconstruire l'historique de chaque site
+        for report_dir in reports/report-*; do
+          if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
+            # Extraire le nom du site depuis le nom du dossier
+            SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
+            echo "Préparation historique pour: $SITE_DIR"
+            
+            # Créer le dossier d'historique pour ce site
+            mkdir -p ".seo-history/${SITE_DIR}"
+            
+            # Créer le marker avec timestamp
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
+            
+            # Ajouter une note d'information
+            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
+          fi
+        done
+        
+        echo "Structure d'historique créée localement"
+    
+    - name: Commit and push history with sync
+      run: |
+        echo "Synchronisation et commit de l'historique..."
         
         # Configurer Git
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
+        
+        # Synchroniser avec la branche distante avant de commiter
+        echo "Synchronisation avec la branche distante..."
+        git fetch origin
+        git rebase origin/main || {
+          echo "Conflit détecté, tentative de résolution automatique..."
+          git rebase --abort
+          git reset --hard origin/main
+          echo "Reset effectué, reconstruction de l'historique..."
+        }
+        
+        # Reconstruire l'historique après sync
+        mkdir -p .seo-history
+        
+        # Créer/Mettre à jour le README
+        cat > .seo-history/README.md << 'EOF'
+# SEO History
+
+Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+
+Structure:
+- Chaque sous-dossier correspond à un site surveillé
+- `.last_check` : timestamp de la dernière vérification
+- `robots.txt` : dernière version du fichier robots.txt
+- `sitemap_*.xml` : derniers sitemaps téléchargés
+
+Généré automatiquement par GitHub Actions.
+EOF
+
+        # Recréer l'historique pour tous les sites
+        for report_dir in reports/report-*; do
+          if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
+            SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
+            mkdir -p ".seo-history/${SITE_DIR}"
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
+            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
+          fi
+        done
         
         # Ajouter tous les fichiers d'historique
         git add .seo-history/
         
         # Vérifier s'il y a des changements à commiter
         if git diff --staged --quiet; then
-          echo "Aucun changement d'historique à commiter"
+          echo "Aucun changement d'historique à commiter après sync"
         else
-          echo "Changements détectés, commit en cours..."
+          echo "Changements détectés après sync, commit en cours..."
           
-          # Commit avec gestion d'erreur
-          if git commit -m "Update SEO history structure - $(date -u +%Y-%m-%d_%H:%M:%S)"; then
+          # Commit avec message unique basé sur timestamp
+          TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+          if git commit -m "Update SEO history structure - ${TIMESTAMP}"; then
             echo "Commit réussi, tentative de push..."
             
-            # Push avec gestion d'erreur
-            if git push; then
-              echo "Push réussi - historique sauvegardé"
-            else
-              echo "Erreur lors du push, mais le commit local est effectué"
-              exit 0  # Ne pas faire échouer le workflow
-            fi
+            # Push avec retry en cas d'échec
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              if git push origin main; then
+                echo "Push réussi - historique sauvegardé"
+                break
+              else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                echo "Push échoué, tentative $RETRY_COUNT/$MAX_RETRIES"
+                
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                  echo "Nouvelle synchronisation avant retry..."
+                  git fetch origin
+                  git rebase origin/main || {
+                    echo "Conflit lors du retry, abandon du push"
+                    echo "L'historique est créé localement pour ce run"
+                    break
+                  }
+                  sleep 2
+                else
+                  echo "Échec du push après $MAX_RETRIES tentatives"
+                  echo "L'historique reste disponible localement pour ce run"
+                fi
+              fi
+            done
           else
-            echo "Aucun changement réel à commiter"
+            echo "Aucun changement réel à commiter après sync"
           fi
         fi
 

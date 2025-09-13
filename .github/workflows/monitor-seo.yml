@@ -469,18 +469,18 @@ jobs:
         
         echo "needs_alert=$NEEDS_ALERT" >> $GITHUB_OUTPUT
     
-    - name: Save history to Git
+    - name: Save current state for history
       if: always()
       run: |
-        echo "Sauvegarde de l'état actuel dans Git..."
+        echo "Préparation de l'état actuel pour sauvegarde..."
         
-        mkdir -p ".seo-history/${SAFE_NAME}"
+        mkdir -p "current_state/${SAFE_NAME}"
         
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SAFE_NAME}/.last_check"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "current_state/${SAFE_NAME}/.last_check"
         
         if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ "${{ steps.robots.outputs.status }}" = "success" ]; then
-          cp "data/${SAFE_NAME}/robots.txt" ".seo-history/${SAFE_NAME}/robots.txt"
-          echo "robots.txt sauvegardé dans Git"
+          cp "data/${SAFE_NAME}/robots.txt" "current_state/${SAFE_NAME}/robots.txt"
+          echo "robots.txt préparé pour sauvegarde"
         else
           echo "robots.txt non sauvegardé (erreur: ${{ steps.robots.outputs.status }})"
         fi
@@ -488,20 +488,13 @@ jobs:
         SITEMAP_COUNT=0
         for sitemap in data/${SAFE_NAME}/sitemap_*; do
           if [ -f "$sitemap" ]; then
-            cp "$sitemap" ".seo-history/${SAFE_NAME}/"
+            cp "$sitemap" "current_state/${SAFE_NAME}/"
             SITEMAP_COUNT=$((SITEMAP_COUNT + 1))
           fi
         done
-        echo "$SITEMAP_COUNT sitemaps sauvegardés dans Git"
-        
-        git config --local user.email "action@github.com"
-        git config --local user.name "SEO Monitor Bot"
-        
-        git add ".seo-history/${SAFE_NAME}/"
-        
-        echo "Historique Git préparé pour ${SAFE_NAME}"
+        echo "$SITEMAP_COUNT sitemaps préparés pour sauvegarde"
     
-    - name: Upload report and changes
+    - name: Upload report and current state
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -509,6 +502,7 @@ jobs:
         path: |
           data/${{ env.SAFE_NAME }}/report.json
           data/${{ env.SAFE_NAME }}/changes.tar.gz
+          current_state/${{ env.SAFE_NAME }}/
         retention-days: 7
         if-no-files-found: ignore
 
@@ -526,130 +520,112 @@ jobs:
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
-    
+        
     - name: Download all reports
       uses: actions/download-artifact@v4
       with:
         pattern: report-*
         path: reports/
       continue-on-error: true
-    
-    - name: Rebuild SEO history from current data
-      run: |
-        echo "Reconstruction de l'historique SEO..."
-        
-        mkdir -p .seo-history
-        
-        cat > .seo-history/README.md << 'EOF'
-        # SEO History
-        
-        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
-        
-        Structure:
-        - Chaque sous-dossier correspond à un site surveillé
-        - `.last_check` : timestamp de la dernière vérification
-        - `robots.txt` : dernière version du fichier robots.txt
-        - `sitemap_*.xml` : derniers sitemaps téléchargés
-        
-        Généré automatiquement par GitHub Actions.
-        EOF
-        
-        for report_dir in reports/report-*; do
-          if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
-            SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
-            echo "Préparation historique pour: $SITE_DIR"
-            
-            mkdir -p ".seo-history/${SITE_DIR}"
-            
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
-            
-            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
-          fi
-        done
-        
-        echo "Structure d'historique créée localement"
-    
-    - name: Commit and push history
-      run: |
-        echo "Synchronisation et commit de l'historique..."
-        
-        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        
-        echo "Synchronisation avec la branche distante..."
-        git fetch origin
-        git rebase origin/main || {
-          echo "Conflit détecté, résolution automatique..."
-          git rebase --abort
-          git reset --hard origin/main
-          echo "Reset effectué, reconstruction de l'historique..."
-        }
-        
-        mkdir -p .seo-history
-        
-        cat > .seo-history/README.md << 'EOF'
-        # SEO History
-        
-        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
-        
-        Structure:
-        - Chaque sous-dossier correspond à un site surveillé
-        - `.last_check` : timestamp de la dernière vérification
-        - `robots.txt` : dernière version du fichier robots.txt
-        - `sitemap_*.xml` : derniers sitemaps téléchargés
-        
-        Généré automatiquement par GitHub Actions.
-        EOF
 
+    - name: Setup history and commit
+      run: |
+        echo "Configuration Git et préparation de l'historique..."
+        
+        # Configuration Git
+        git config --local user.email "action@github.com"
+        git config --local user.name "SEO Monitor Bot"
+        
+        # Nettoyer l'état Git pour éviter les conflits
+        git reset --hard
+        git clean -fd
+        
+        # Créer/mettre à jour l'historique
+        mkdir -p .seo-history
+        
+        cat > .seo-history/README.md << 'EOF'
+        # SEO History
+        
+        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+        
+        Structure:
+        - Chaque sous-dossier correspond à un site surveillé
+        - `.last_check` : timestamp de la dernière vérification
+        - `robots.txt` : dernière version du fichier robots.txt
+        - `sitemap_*.xml` : derniers sitemaps téléchargés
+        
+        Généré automatiquement par GitHub Actions.
+        EOF
+        
+        # Traiter les rapports téléchargés
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
             SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
+            echo "Traitement historique pour: $SITE_DIR"
+            
             mkdir -p ".seo-history/${SITE_DIR}"
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
-            echo "Site surveillé: $(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)" > ".seo-history/${SITE_DIR}/info.txt"
+            
+            # Copier l'état actuel si disponible
+            if [ -d "$report_dir/current_state/$SITE_DIR" ]; then
+              echo "Copie de l'état actuel pour $SITE_DIR"
+              cp -r "$report_dir/current_state/$SITE_DIR/"* ".seo-history/${SITE_DIR}/" 2>/dev/null || true
+            else
+              # Fallback : créer au minimum le timestamp
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
+            fi
+            
+            # Info du site depuis le rapport
+            SITE_NAME=$(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)
+            SITE_URL=$(jq -r '.url // "Unknown"' "$report_dir/report.json" 2>/dev/null)
+            echo "Site: $SITE_NAME" > ".seo-history/${SITE_DIR}/info.txt"
+            echo "URL: $SITE_URL" >> ".seo-history/${SITE_DIR}/info.txt"
+            echo "Last update: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ".seo-history/${SITE_DIR}/info.txt"
           fi
         done
         
+        echo "Historique préparé, ajout à Git..."
+        
+        # Ajouter tous les fichiers d'historique
         git add .seo-history/
         
+        # Vérifier s'il y a des changements à committer
         if git diff --staged --quiet; then
-          echo "Aucun changement d'historique à commiter après sync"
+          echo "Aucun changement à committer"
         else
-          echo "Changements détectés après sync, commit en cours..."
+          # Commit avec un message horodaté
+          COMMIT_MESSAGE="SEO history update - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Commit: $COMMIT_MESSAGE"
           
-          TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
-          if git commit -m "Update SEO history structure - ${TIMESTAMP}"; then
-            echo "Commit réussi, tentative de push..."
+          if git commit -m "$COMMIT_MESSAGE"; then
+            echo "Commit local réussi"
             
+            # Push avec retry simple
             MAX_RETRIES=3
-            RETRY_COUNT=0
-            
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Tentative de push $i/$MAX_RETRIES"
+              
               if git push origin main; then
-                echo "Push réussi - historique sauvegardé"
+                echo "Push successful on attempt $i"
+                echo "Historique SEO sauvegardé avec succès"
                 break
               else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                echo "Push échoué, tentative $RETRY_COUNT/$MAX_RETRIES"
-                
-                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                  echo "Nouvelle synchronisation avant retry..."
-                  git fetch origin
-                  git rebase origin/main || {
-                    echo "Conflit lors du retry, abandon du push"
-                    echo "L'historique est créé localement pour ce run"
-                    break
+                echo "Push failed on attempt $i"
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "Synchronisation avant retry..."
+                  git pull --rebase origin main || {
+                    echo "Rebase failed, trying merge..."
+                    git rebase --abort 2>/dev/null || true
+                    git pull --no-rebase origin main
                   }
                   sleep 2
                 else
-                  echo "Échec du push après $MAX_RETRIES tentatives"
-                  echo "L'historique reste disponible localement pour ce run"
+                  echo "Push failed after $MAX_RETRIES attempts"
+                  echo "L'historique reste disponible localement"
                 fi
               fi
             done
           else
-            echo "Aucun changement réel à commiter après sync"
+            echo "Erreur lors du commit local"
           fi
         fi
 
@@ -938,3 +914,4 @@ jobs:
             print(f"Erreur envoi email: {e}")
             exit(1)
         PYTHON
+        echo "

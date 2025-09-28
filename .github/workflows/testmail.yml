@@ -3,9 +3,9 @@ import smtplib
 from email.mime.text import MIMEText
 
 # Vos identifiants
-EMAIL = "vbouvier.redactrice@gmail.com"
-PASSWORD = "avrf enpz otim qlnf"  # Sans espaces
-TO = "vbouvier@cybercite.fr"
+EMAIL = 'vbouvier.redactrice@gmail.com'
+PASSWORD = 'avrf enpz otim qlnf'  # Sans espaces
+TO = 'vbouvier@cybercite.fr'
 
 try:
     server = smtplib.SMTP('smtp.gmail.com', 587)

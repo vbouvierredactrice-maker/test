@@ -275,19 +275,57 @@ jobs:
         # Vérifier si le dossier d'historique existe dans Git
         if [ -d ".seo-history/${SAFE_NAME}" ]; then
           echo "Historique trouvé dans Git pour ${SAFE_NAME}"
+          
+          # Copier tous les fichiers disponibles
           cp -r ".seo-history/${SAFE_NAME}/"* "history/${SAFE_NAME}/" 2>/dev/null || true
+          
+          # Vérifier le contenu copié
+          echo "Contenu de l'historique restauré :"
+          ls -la "history/${SAFE_NAME}/" || echo "Dossier vide"
+          
+          # Vérifier la présence de fichiers critiques
+          HAS_ROBOTS=false
+          HAS_SITEMAPS=false
+          HAS_TIMESTAMP=false
+          
+          if [ -f "history/${SAFE_NAME}/robots.txt" ]; then
+            ROBOTS_SIZE=$(wc -c < "history/${SAFE_NAME}/robots.txt")
+            echo "✅ robots.txt restauré (${ROBOTS_SIZE} bytes)"
+            HAS_ROBOTS=true
+          fi
+          
+          SITEMAP_COUNT=$(ls "history/${SAFE_NAME}"/sitemap_* 2>/dev/null | wc -l || echo 0)
+          if [ "$SITEMAP_COUNT" -gt 0 ]; then
+            echo "✅ ${SITEMAP_COUNT} sitemap(s) restauré(s)"
+            HAS_SITEMAPS=true
+          fi
           
           if [ -f "history/${SAFE_NAME}/.last_check" ]; then
             LAST_CHECK=$(cat "history/${SAFE_NAME}/.last_check")
-            echo "Dernière vérification: $LAST_CHECK"
+            echo "✅ Timestamp restauré: $LAST_CHECK"
+            HAS_TIMESTAMP=true
+          else
+            echo "⚠️ Fichier .last_check manquant - sera recréé"
+            # Créer un timestamp par défaut basé sur la date de modification du dossier
+            if [ "$HAS_ROBOTS" = "true" ] || [ "$HAS_SITEMAPS" = "true" ]; then
+              echo "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" > "history/${SAFE_NAME}/.last_check"
+              echo "✅ Timestamp par défaut créé"
+              HAS_TIMESTAMP=true
+            fi
+          fi
+          
+          # Déterminer si l'historique est utilisable
+          if [ "$HAS_ROBOTS" = "true" ] || [ "$HAS_SITEMAPS" = "true" ]; then
+            echo "✅ Historique valide restauré"
+            LAST_CHECK=$(cat "history/${SAFE_NAME}/.last_check" 2>/dev/null || echo "unknown")
             echo "has_history=true" >> $GITHUB_OUTPUT
             echo "last_check=$LAST_CHECK" >> $GITHUB_OUTPUT
           else
-            echo "Fichier .last_check manquant"
+            echo "⚠️ Historique vide ou invalide - traité comme première exécution"
             echo "has_history=false" >> $GITHUB_OUTPUT
           fi
         else
-          echo "Aucun historique trouvé dans Git pour ${SAFE_NAME}"
+          echo "❌ Aucun historique trouvé dans Git pour ${SAFE_NAME}"
           echo "has_history=false" >> $GITHUB_OUTPUT
         fi
     
@@ -1036,7 +1074,105 @@ jobs:
                         sites_to_show.append((report, has_errors, has_changes, is_first_run))
                         
                 except Exception as e:
-                    print(f"Erreur lecture rapport {report_file}: {e}")
+                    print("✅ Email envoyé avec succès!")
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'envoi de l'email: {e}")
+            exit(1)
+        
+        PYTHON_SCRIPT
+
+  # Job optionnel de réparation d'historique
+  repair_history:
+    name: Repair History
+    runs-on: ubuntu-latest
+    if: github.event.inputs.force_alert == 'true' && github.event.inputs.site_filter == 'REPAIR'
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Repair missing timestamps
+      run: |
+        echo "🔧 RÉPARATION DE L'HISTORIQUE"
+        echo "============================="
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "SEO Monitor Bot"
+        
+        REPAIRS_MADE=0
+        
+        if [ -d ".seo-history" ]; then
+          for site_dir in .seo-history/*/; do
+            if [ -d "$site_dir" ]; then
+              SITE_NAME=$(basename "$site_dir")
+              echo "🔍 Vérification: $SITE_NAME"
+              
+              # Vérifier si .last_check existe
+              if [ ! -f "$site_dir/.last_check" ]; then
+                echo "  ❌ .last_check manquant"
+                
+                # Vérifier s'il y a des fichiers dans le dossier
+                if [ "$(ls -A "$site_dir" 2>/dev/null)" ]; then
+                  echo "  🔧 Création de .last_check par défaut"
+                  
+                  # Utiliser la date de modification du fichier le plus récent
+                  LATEST_FILE=$(find "$site_dir" -type f -exec stat -c '%Y %n' {} + 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || echo "")
+                  
+                  if [ -n "$LATEST_FILE" ]; then
+                    # Convertir la date de modification en format ISO
+                    TIMESTAMP=$(date -u -d "@$(stat -c %Y "$LATEST_FILE" 2>/dev/null || echo $(date +%s))" +%Y-%m-%dT%H:%M:%SZ)
+                  else
+                    # Utiliser une date par défaut (1 heure avant maintenant)
+                    TIMESTAMP=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+                  fi
+                  
+                  echo "$TIMESTAMP" > "$site_dir/.last_check"
+                  echo "  ✅ Timestamp créé: $TIMESTAMP"
+                  REPAIRS_MADE=$((REPAIRS_MADE + 1))
+                else
+                  echo "  ⚠️ Dossier vide - suppression"
+                  rm -rf "$site_dir"
+                fi
+              else
+                TIMESTAMP=$(cat "$site_dir/.last_check")
+                echo "  ✅ .last_check OK: $TIMESTAMP"
+              fi
+            fi
+          done
+          
+          echo ""
+          echo "📊 RÉSULTATS:"
+          echo "Réparations effectuées: $REPAIRS_MADE"
+          
+          if [ $REPAIRS_MADE -gt 0 ]; then
+            echo ""
+            echo "💾 Commit des réparations..."
+            
+            git add .seo-history/
+            
+            if ! git diff --staged --quiet; then
+              git commit -m "SEO Monitor: Repair missing timestamps for $REPAIRS_MADE sites"
+              
+              if git push origin HEAD; then
+                echo "✅ Réparations commitées et pushées"
+              else
+                echo "❌ Erreur lors du push"
+              fi
+            else
+              echo "ℹ️ Aucun changement à committer"
+            fi
+          else
+            echo "ℹ️ Aucune réparation nécessaire"
+          fi
+        else
+          echo "❌ Dossier .seo-history n'existe pas"
+        fi(f"Erreur lecture rapport {report_file}: {e}")
         
         if sites_to_show:
             html += "<h2>🎯 Sites nécessitant une attention</h2>"
@@ -1208,10 +1344,4 @@ jobs:
                 server.login(sender, password)
                 server.sendmail(sender, receiver, message.as_string())
             
-            print("✅ Email envoyé avec succès!")
-            
-        except Exception as e:
-            print(f"❌ Erreur lors de l'envoi de l'email: {e}")
-            exit(1)
-        
-        PYTHON_SCRIPT
+            print

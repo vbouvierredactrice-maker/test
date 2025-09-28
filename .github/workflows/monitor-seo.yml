@@ -252,8 +252,11 @@ jobs:
       fail-fast: false
     
     steps:
-    - name: Checkout
+    - name: Checkout with full history
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Setup
       run: |
@@ -262,22 +265,55 @@ jobs:
         mkdir -p "data/${SAFE_NAME}"
         mkdir -p "history/${SAFE_NAME}"
         mkdir -p "changes/${SAFE_NAME}"
+        echo "Site: ${{ matrix.name }} -> Safe name: ${SAFE_NAME}"
+    
+    - name: Restore history from Git
+      id: restore_history
+      run: |
+        echo "Tentative de restauration de l'historique depuis Git..."
+        
+        # Vérifier si le dossier d'historique existe dans Git
+        if [ -d ".seo-history/${SAFE_NAME}" ]; then
+          echo "Historique trouvé dans Git pour ${SAFE_NAME}"
+          cp -r ".seo-history/${SAFE_NAME}/"* "history/${SAFE_NAME}/" 2>/dev/null || true
+          
+          if [ -f "history/${SAFE_NAME}/.last_check" ]; then
+            LAST_CHECK=$(cat "history/${SAFE_NAME}/.last_check")
+            echo "Dernière vérification: $LAST_CHECK"
+            echo "has_history=true" >> $GITHUB_OUTPUT
+            echo "last_check=$LAST_CHECK" >> $GITHUB_OUTPUT
+          else
+            echo "Fichier .last_check manquant"
+            echo "has_history=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Aucun historique trouvé dans Git pour ${SAFE_NAME}"
+          echo "has_history=false" >> $GITHUB_OUTPUT
+        fi
     
     - name: Download robots.txt
       id: robots
       run: |
         URL="${{ matrix.url }}${{ matrix.robots_path }}"
-        echo "Robots.txt: $URL"
+        echo "Téléchargement robots.txt: $URL"
         
         HTTP_STATUS=$(curl -s -o "data/${SAFE_NAME}/robots.txt" -w "%{http_code}" -L "$URL" \
           -H "User-Agent: Mozilla/5.0 (compatible; SEOMonitor/1.0)" \
-          --max-time 30)
+          -H "Accept: text/plain,*/*" \
+          --max-time 30 \
+          --retry 2)
         
         if [ "$HTTP_STATUS" -eq 200 ]; then
-          echo "OK ($(wc -l < data/${SAFE_NAME}/robots.txt) lignes)"
+          FILE_SIZE=$(wc -c < "data/${SAFE_NAME}/robots.txt")
+          echo "✅ Robots.txt téléchargé: ${FILE_SIZE} bytes"
           echo "status=success" >> $GITHUB_OUTPUT
+          echo "size=$FILE_SIZE" >> $GITHUB_OUTPUT
+          
+          # Afficher le contenu pour debug
+          echo "Contenu robots.txt (50 premières lignes):"
+          head -50 "data/${SAFE_NAME}/robots.txt" || true
         else
-          echo "Erreur HTTP $HTTP_STATUS"
+          echo "❌ Erreur HTTP $HTTP_STATUS pour robots.txt"
           echo "status=error" >> $GITHUB_OUTPUT
           echo "error=HTTP $HTTP_STATUS" >> $GITHUB_OUTPUT
         fi
@@ -291,17 +327,29 @@ jobs:
         
         echo '${{ toJson(matrix.sitemaps) }}' | jq -r '.[]' | while IFS= read -r sitemap; do
           URL="${{ matrix.url }}${sitemap}"
-          FILENAME=$(echo "$sitemap" | sed 's/\//_/g')
+          FILENAME=$(echo "$sitemap" | sed 's/\//_/g' | sed 's/\.xml$/_xml/')
           
-          echo "  -> $URL"
-          HTTP_STATUS=$(curl -s -o "data/${SAFE_NAME}/sitemap_${FILENAME}" -w "%{http_code}" -L "$URL" \
+          echo "  📄 Téléchargement: $URL"
+          HTTP_STATUS=$(curl -s -o "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" -w "%{http_code}" -L "$URL" \
             -H "User-Agent: Mozilla/5.0 (compatible; SEOMonitor/1.0)" \
-            --max-time 30)
+            -H "Accept: application/xml,text/xml,*/*" \
+            --max-time 60 \
+            --retry 2)
           
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "    OK ($(wc -c < data/${SAFE_NAME}/sitemap_${FILENAME}) bytes)"
+            FILE_SIZE=$(wc -c < "data/${SAFE_NAME}/sitemap_${FILENAME}.xml")
+            echo "    ✅ OK: ${FILE_SIZE} bytes"
+            
+            # Vérifier si c'est un XML valide
+            if xmllint --noout "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null; then
+              # Compter les URLs pour les sitemaps normaux
+              URL_COUNT=$(grep -o '<loc>' "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null | wc -l || echo 0)
+              echo "    📊 URLs trouvées: $URL_COUNT"
+            else
+              echo "    ⚠️ Fichier XML non valide"
+            fi
           else
-            echo "    Erreur HTTP $HTTP_STATUS"
+            echo "    ❌ Erreur HTTP $HTTP_STATUS"
             echo "error" > /tmp/sitemap_status.txt
             echo "${sitemap}:${HTTP_STATUS};" >> /tmp/sitemap_errors.txt
           fi
@@ -313,178 +361,226 @@ jobs:
         echo "status=$STATUS" >> $GITHUB_OUTPUT
         echo "errors=$ERRORS" >> $GITHUB_OUTPUT
     
-    - name: Setup initial state and restore history
-      id: setup_state
+    - name: Check for changes (robots.txt)
+      id: check_robots
       run: |
-        echo "Initialisation de l'état..."
-        mkdir -p "history/${SAFE_NAME}"
+        echo "🔍 Vérification des changements robots.txt..."
         
-        echo "Vérification de l'historique Git local..."
+        HAS_HISTORY="${{ steps.restore_history.outputs.has_history }}"
+        ROBOTS_CHANGED=false
+        ROBOTS_DETAILS=""
         
-        if [ -d ".seo-history/${SAFE_NAME}" ]; then
-          echo "Historique Git local trouvé pour ${SAFE_NAME}"
-          cp -r .seo-history/${SAFE_NAME}/* "history/${SAFE_NAME}/" 2>/dev/null || true
+        if [ "$HAS_HISTORY" = "true" ] && [ -f "history/${SAFE_NAME}/robots.txt" ] && [ -f "data/${SAFE_NAME}/robots.txt" ]; then
+          echo "Comparaison robots.txt avec l'historique..."
           
-          if [ -f "history/${SAFE_NAME}/.last_check" ] || [ -f "history/${SAFE_NAME}/robots.txt" ]; then
-            echo "Historique restauré avec succès depuis Git local"
-            echo "has_history=true" >> $GITHUB_OUTPUT
+          # Comparaison avec informations détaillées
+          if ! diff -q "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > /dev/null; then
+            ROBOTS_CHANGED=true
+            echo "🔄 Changements détectés dans robots.txt"
+            
+            # Créer un diff détaillé
+            diff -u "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > "changes/${SAFE_NAME}/robots_diff.txt" || true
+            
+            ADDED_LINES=$(grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | wc -l || echo 0)
+            REMOVED_LINES=$(grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | wc -l || echo 0)
+            
+            echo "Changements robots.txt: +${ADDED_LINES}/-${REMOVED_LINES} lignes"
+            ROBOTS_DETAILS="modified(${ADDED_LINES}+/${REMOVED_LINES}-)"
+            
+            # Créer un rapport détaillé
+            {
+              echo "### ROBOTS.TXT CHANGES ###"
+              echo "Lignes ajoutées: $ADDED_LINES"
+              echo "Lignes supprimées: $REMOVED_LINES"
+              echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo ""
+              echo "=== DIFF COMPLET ==="
+              cat "changes/${SAFE_NAME}/robots_diff.txt"
+            } > "changes/${SAFE_NAME}/robots_changes.txt"
           else
-            echo "Dossier d'historique vide dans Git local"
-            echo "has_history=false" >> $GITHUB_OUTPUT
+            echo "✅ Aucun changement dans robots.txt"
           fi
+        elif [ "$HAS_HISTORY" = "false" ]; then
+          echo "🆕 Première vérification - robots.txt enregistré"
         else
-          echo "Aucun historique Git local trouvé - première exécution"
-          echo "has_history=false" >> $GITHUB_OUTPUT
+          echo "⚠️ Problème de comparaison robots.txt"
         fi
-    
-    - name: Determine execution type
-      id: execution_type
-      run: |
-        if [ "${{ steps.setup_state.outputs.has_history }}" = "true" ]; then
-          echo "Historique trouvé - comparaison activée"
-          echo "is_first_run=false" >> $GITHUB_OUTPUT
-        else
-          echo "Première exécution - création de l'état initial"
-          echo "is_first_run=true" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Check for changes
-      id: changes
-      run: |
-        echo "Analyse des changements..."
         
-        IS_FIRST_RUN="${{ steps.execution_type.outputs.is_first_run }}"
-        HAS_CHANGES=false
-        CHANGES_DETAILS=""
+        echo "robots_changed=$ROBOTS_CHANGED" >> $GITHUB_OUTPUT
+        echo "robots_details=$ROBOTS_DETAILS" >> $GITHUB_OUTPUT
+    
+    - name: Check for changes (sitemaps)
+      id: check_sitemaps
+      run: |
+        echo "🔍 Vérification des changements sitemaps..."
         
-        if [ "$IS_FIRST_RUN" = "true" ]; then
-          echo "Première vérification pour ce site"
-        else
-          echo "Comparaison avec l'historique..."
-          
-          if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ -f "history/${SAFE_NAME}/robots.txt" ]; then
-            if ! diff -q "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > /dev/null; then
-              HAS_CHANGES=true
-              echo "Changements détectés dans robots.txt"
-              
-              diff -u "history/${SAFE_NAME}/robots.txt" "data/${SAFE_NAME}/robots.txt" > "changes/${SAFE_NAME}/robots_diff.txt" || true
-              
-              ADDED_LINES=$(grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | wc -l || echo 0)
-              REMOVED_LINES=$(grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | wc -l || echo 0)
-              
-              echo "### ROBOTS.TXT CHANGES ###" > "changes/${SAFE_NAME}/robots_changes.txt"
-              echo "Lignes ajoutées: $ADDED_LINES" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              echo "Lignes supprimées: $REMOVED_LINES" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              echo "" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              echo "=== AJOUTS ===" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              grep "^+" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^+++" | head -20 >> "changes/${SAFE_NAME}/robots_changes.txt" || true
-              echo "" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              echo "=== SUPPRESSIONS ===" >> "changes/${SAFE_NAME}/robots_changes.txt"
-              grep "^-" "changes/${SAFE_NAME}/robots_diff.txt" | grep -v "^---" | head -20 >> "changes/${SAFE_NAME}/robots_changes.txt" || true
-              
-              CHANGES_DETAILS="${CHANGES_DETAILS}robots.txt:modified($ADDED_LINES+/$REMOVED_LINES-);"
-            fi
-          fi
+        HAS_HISTORY="${{ steps.restore_history.outputs.has_history }}"
+        SITEMAPS_CHANGED=false
+        SITEMAPS_DETAILS=""
+        
+        if [ "$HAS_HISTORY" = "true" ]; then
+          echo "Comparaison des sitemaps avec l'historique..."
           
           for sitemap_file in data/${SAFE_NAME}/sitemap_*; do
             if [ -f "$sitemap_file" ]; then
               BASENAME=$(basename "$sitemap_file")
+              echo "  Analyse $BASENAME..."
               
               if [ -f "history/${SAFE_NAME}/$BASENAME" ]; then
-                if ! diff -q "$sitemap_file" "history/${SAFE_NAME}/$BASENAME" > /dev/null; then
-                  HAS_CHANGES=true
-                  echo "Changements dans $BASENAME"
+                # Comparaison basée sur la taille et le contenu
+                OLD_SIZE=$(wc -c < "history/${SAFE_NAME}/$BASENAME")
+                NEW_SIZE=$(wc -c < "$sitemap_file")
+                
+                echo "    Taille: ${OLD_SIZE} -> ${NEW_SIZE} bytes"
+                
+                if ! cmp -s "history/${SAFE_NAME}/$BASENAME" "$sitemap_file"; then
+                  SITEMAPS_CHANGED=true
+                  echo "    🔄 Changements détectés dans $BASENAME"
                   
-                  if [[ "$BASENAME" == *".xml" ]]; then
-                    grep -o '<loc>[^<]*</loc>' "history/${SAFE_NAME}/$BASENAME" 2>/dev/null | sed 's/<[^>]*>//g' | sort > "/tmp/old_urls.txt" || touch "/tmp/old_urls.txt"
-                    grep -o '<loc>[^<]*</loc>' "$sitemap_file" | sed 's/<[^>]*>//g' | sort > "/tmp/new_urls.txt"
+                  # Pour les fichiers XML, analyser les URLs
+                  if [[ "$BASENAME" == *.xml ]]; then
+                    # Extraire et comparer les URLs
+                    grep -o '<loc>[^<]*</loc>' "history/${SAFE_NAME}/$BASENAME" 2>/dev/null | sed 's/<[^>]*>//g' | sort > "/tmp/old_urls_${BASENAME}.txt" || touch "/tmp/old_urls_${BASENAME}.txt"
+                    grep -o '<loc>[^<]*</loc>' "$sitemap_file" 2>/dev/null | sed 's/<[^>]*>//g' | sort > "/tmp/new_urls_${BASENAME}.txt" || touch "/tmp/new_urls_${BASENAME}.txt"
                     
-                    ADDED_URLS=$(comm -13 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | wc -l)
-                    REMOVED_URLS=$(comm -23 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | wc -l)
+                    ADDED_URLS=$(comm -13 "/tmp/old_urls_${BASENAME}.txt" "/tmp/new_urls_${BASENAME}.txt" | wc -l)
+                    REMOVED_URLS=$(comm -23 "/tmp/old_urls_${BASENAME}.txt" "/tmp/new_urls_${BASENAME}.txt" | wc -l)
                     
-                    echo "### $BASENAME CHANGES ###" > "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                    echo "URLs ajoutées: $ADDED_URLS" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                    echo "URLs supprimées: $REMOVED_URLS" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                    echo "" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
+                    echo "    URLs: +${ADDED_URLS}/-${REMOVED_URLS}"
                     
-                    if [ $ADDED_URLS -gt 0 ]; then
-                      echo "=== NOUVELLES URLS ===" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                      comm -13 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | head -10 >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                    fi
+                    # Créer un rapport de changements
+                    {
+                      echo "### $BASENAME CHANGES ###"
+                      echo "URLs ajoutées: $ADDED_URLS"
+                      echo "URLs supprimées: $REMOVED_URLS"
+                      echo "Taille: ${OLD_SIZE} -> ${NEW_SIZE} bytes"
+                      echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                      echo ""
+                      
+                      if [ $ADDED_URLS -gt 0 ]; then
+                        echo "=== NOUVELLES URLS (max 10) ==="
+                        comm -13 "/tmp/old_urls_${BASENAME}.txt" "/tmp/new_urls_${BASENAME}.txt" | head -10
+                        echo ""
+                      fi
+                      
+                      if [ $REMOVED_URLS -gt 0 ]; then
+                        echo "=== URLS SUPPRIMÉES (max 10) ==="
+                        comm -23 "/tmp/old_urls_${BASENAME}.txt" "/tmp/new_urls_${BASENAME}.txt" | head -10
+                        echo ""
+                      fi
+                    } > "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
                     
-                    if [ $REMOVED_URLS -gt 0 ]; then
-                      echo "=== URLS SUPPRIMÉES ===" >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                      comm -23 "/tmp/old_urls.txt" "/tmp/new_urls.txt" | head -10 >> "changes/${SAFE_NAME}/${BASENAME}_changes.txt"
-                    fi
-                    
-                    CHANGES_DETAILS="${CHANGES_DETAILS}${BASENAME}:modified($ADDED_URLS+/$REMOVED_URLS-);"
+                    SITEMAPS_DETAILS="${SITEMAPS_DETAILS}${BASENAME}:modified(${ADDED_URLS}+/${REMOVED_URLS}-);"
+                  else
+                    SITEMAPS_DETAILS="${SITEMAPS_DETAILS}${BASENAME}:modified(size:${OLD_SIZE}->${NEW_SIZE});"
                   fi
+                else
+                  echo "    ✅ Aucun changement"
                 fi
+              else
+                echo "    🆕 Nouveau sitemap détecté: $BASENAME"
+                SITEMAPS_CHANGED=true
+                SITEMAPS_DETAILS="${SITEMAPS_DETAILS}${BASENAME}:new;"
               fi
             fi
           done
+        else
+          echo "🆕 Première vérification - sitemaps enregistrés"
         fi
         
-        echo "is_first_run=$IS_FIRST_RUN" >> $GITHUB_OUTPUT
-        echo "has_changes=$HAS_CHANGES" >> $GITHUB_OUTPUT
-        echo "details=$CHANGES_DETAILS" >> $GITHUB_OUTPUT
+        echo "sitemaps_changed=$SITEMAPS_CHANGED" >> $GITHUB_OUTPUT
+        echo "sitemaps_details=$SITEMAPS_DETAILS" >> $GITHUB_OUTPUT
     
-    - name: Create detailed report
+    - name: Create comprehensive report
       id: report
       run: |
-        REPORT_FILE="data/${SAFE_NAME}/report.json"
+        echo "📊 Création du rapport..."
         
+        IS_FIRST_RUN="${{ steps.restore_history.outputs.has_history != 'true' }}"
+        HAS_CHANGES=${{ steps.check_robots.outputs.robots_changed == 'true' || steps.check_sitemaps.outputs.sitemaps_changed == 'true' }}
+        HAS_ERRORS=${{ steps.robots.outputs.status == 'error' || steps.sitemaps.outputs.status == 'error' }}
+        
+        # Déterminer si une alerte est nécessaire
+        NEEDS_ALERT=false
+        if [ "$HAS_ERRORS" = "true" ]; then
+          NEEDS_ALERT=true
+          echo "🚨 Alerte nécessaire: erreurs détectées"
+        elif [ "$IS_FIRST_RUN" = "false" ] && [ "$HAS_CHANGES" = "true" ]; then
+          NEEDS_ALERT=true
+          echo "📢 Alerte nécessaire: changements détectés"
+        elif [ "${{ github.event.inputs.force_alert }}" = "true" ]; then
+          NEEDS_ALERT=true
+          echo "🔔 Alerte forcée par l'utilisateur"
+        fi
+        
+        # Créer le rapport JSON
+        REPORT_FILE="data/${SAFE_NAME}/report.json"
         cat << EOF > "$REPORT_FILE"
         {
           "site": "${{ matrix.name }}",
           "url": "${{ matrix.url }}",
           "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "is_first_run": ${{ steps.changes.outputs.is_first_run }},
+          "is_first_run": $IS_FIRST_RUN,
+          "has_history": ${{ steps.restore_history.outputs.has_history == 'true' }},
+          "last_check": "${{ steps.restore_history.outputs.last_check }}",
           "robots": {
             "status": "${{ steps.robots.outputs.status }}",
-            "error": "${{ steps.robots.outputs.error }}"
+            "error": "${{ steps.robots.outputs.error }}",
+            "size": "${{ steps.robots.outputs.size }}",
+            "changed": ${{ steps.check_robots.outputs.robots_changed == 'true' }},
+            "details": "${{ steps.check_robots.outputs.robots_details }}"
           },
           "sitemaps": {
             "status": "${{ steps.sitemaps.outputs.status }}",
-            "errors": "${{ steps.sitemaps.outputs.errors }}"
+            "errors": "${{ steps.sitemaps.outputs.errors }}",
+            "changed": ${{ steps.check_sitemaps.outputs.sitemaps_changed == 'true' }},
+            "details": "${{ steps.check_sitemaps.outputs.sitemaps_details }}"
           },
           "changes": {
-            "has_changes": ${{ steps.changes.outputs.has_changes }},
-            "details": "${{ steps.changes.outputs.details }}"
+            "has_changes": $HAS_CHANGES,
+            "robots_changed": ${{ steps.check_robots.outputs.robots_changed == 'true' }},
+            "sitemaps_changed": ${{ steps.check_sitemaps.outputs.sitemaps_changed == 'true' }}
+          },
+          "alert": {
+            "needs_alert": $NEEDS_ALERT,
+            "reason": "$([ "$HAS_ERRORS" = "true" ] && echo "errors" || ([ "$HAS_CHANGES" = "true" ] && echo "changes" || echo "none"))"
           }
         }
         EOF
         
-        if [ -d "changes/${SAFE_NAME}" ] && [ "$(ls -A changes/${SAFE_NAME})" ]; then
-          echo "Détails des changements disponibles"
+        # Archiver les détails des changements si disponibles
+        if [ -d "changes/${SAFE_NAME}" ] && [ "$(ls -A changes/${SAFE_NAME} 2>/dev/null)" ]; then
+          echo "📦 Archivage des changements détectés"
           tar -czf "data/${SAFE_NAME}/changes.tar.gz" -C "changes/${SAFE_NAME}" .
         fi
         
-        NEEDS_ALERT=false
-        if [ "${{ steps.robots.outputs.status }}" = "error" ] || \
-           [ "${{ steps.sitemaps.outputs.status }}" = "error" ] || \
-           [ "${{ steps.changes.outputs.has_changes }}" = "true" ]; then
-          NEEDS_ALERT=true
-        fi
-        
         echo "needs_alert=$NEEDS_ALERT" >> $GITHUB_OUTPUT
+        echo "is_first_run=$IS_FIRST_RUN" >> $GITHUB_OUTPUT
+        echo "has_changes=$HAS_CHANGES" >> $GITHUB_OUTPUT
+        echo "has_errors=$HAS_ERRORS" >> $GITHUB_OUTPUT
+        
+        # Afficher un résumé
+        echo "=== RÉSUMÉ POUR ${{ matrix.name }} ==="
+        echo "Première exécution: $IS_FIRST_RUN"
+        echo "Changements: $HAS_CHANGES"
+        echo "Erreurs: $HAS_ERRORS"
+        echo "Alerte nécessaire: $NEEDS_ALERT"
     
-    - name: Save current state for history
+    - name: Save current state
       if: always()
       run: |
-        echo "Préparation de l'état actuel pour sauvegarde..."
+        echo "💾 Sauvegarde de l'état actuel..."
         
         mkdir -p "current_state/${SAFE_NAME}"
-        
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "current_state/${SAFE_NAME}/.last_check"
         
+        # Sauvegarder robots.txt si téléchargé avec succès
         if [ -f "data/${SAFE_NAME}/robots.txt" ] && [ "${{ steps.robots.outputs.status }}" = "success" ]; then
           cp "data/${SAFE_NAME}/robots.txt" "current_state/${SAFE_NAME}/robots.txt"
-          echo "robots.txt préparé pour sauvegarde"
-        else
-          echo "robots.txt non sauvegardé (erreur: ${{ steps.robots.outputs.status }})"
+          echo "✅ robots.txt sauvegardé"
         fi
         
+        # Sauvegarder tous les sitemaps téléchargés
         SITEMAP_COUNT=0
         for sitemap in data/${SAFE_NAME}/sitemap_*; do
           if [ -f "$sitemap" ]; then
@@ -492,9 +588,17 @@ jobs:
             SITEMAP_COUNT=$((SITEMAP_COUNT + 1))
           fi
         done
-        echo "$SITEMAP_COUNT sitemaps préparés pour sauvegarde"
+        echo "✅ $SITEMAP_COUNT sitemaps sauvegardés"
+        
+        # Créer un fichier info pour traçabilité
+        {
+          echo "Site: ${{ matrix.name }}"
+          echo "URL: ${{ matrix.url }}"
+          echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Run ID: ${{ github.run_id }}"
+        } > "current_state/${SAFE_NAME}/info.txt"
     
-    - name: Upload report and current state
+    - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -503,7 +607,7 @@ jobs:
           data/${{ env.SAFE_NAME }}/report.json
           data/${{ env.SAFE_NAME }}/changes.tar.gz
           current_state/${{ env.SAFE_NAME }}/
-        retention-days: 7
+        retention-days: 30
         if-no-files-found: ignore
 
   commit_history:
@@ -519,6 +623,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
+        fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Download all reports
@@ -528,104 +633,123 @@ jobs:
         path: reports/
       continue-on-error: true
 
-    - name: Setup history and commit
+    - name: Update history in Git
       run: |
-        echo "Configuration Git et préparation de l'historique..."
+        echo "🔄 Mise à jour de l'historique Git..."
         
         # Configuration Git
         git config --local user.email "action@github.com"
         git config --local user.name "SEO Monitor Bot"
         
-        # Nettoyer l'état Git pour éviter les conflits
-        git reset --hard
-        git clean -fd
+        # S'assurer que nous sommes sur la branche principale
+        git checkout main || git checkout master || echo "Already on main branch"
         
-        # Créer/mettre à jour l'historique
+        # Créer le dossier d'historique s'il n'existe pas
         mkdir -p .seo-history
         
+        # Documentation
         cat > .seo-history/README.md << 'EOF'
         # SEO History
         
-        Ce dossier contient l'historique des fichiers robots.txt et sitemaps pour le monitoring SEO.
+        Ce dossier contient l'historique des fichiers robots.txt et sitemaps.
         
         Structure:
         - Chaque sous-dossier correspond à un site surveillé
         - `.last_check` : timestamp de la dernière vérification
         - `robots.txt` : dernière version du fichier robots.txt
         - `sitemap_*.xml` : derniers sitemaps téléchargés
+        - `info.txt` : informations sur le site
         
         Généré automatiquement par GitHub Actions.
         EOF
         
-        # Traiter les rapports téléchargés
+        # Traiter tous les rapports téléchargés
+        SITES_UPDATED=0
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
             SITE_DIR=$(basename "$report_dir" | sed 's/report-//')
-            echo "Traitement historique pour: $SITE_DIR"
+            echo "📁 Traitement: $SITE_DIR"
             
+            # Créer le dossier pour ce site
             mkdir -p ".seo-history/${SITE_DIR}"
             
-            # Copier l'état actuel si disponible
+            # Copier l'état actuel depuis les artifacts
             if [ -d "$report_dir/current_state/$SITE_DIR" ]; then
-              echo "Copie de l'état actuel pour $SITE_DIR"
+              echo "  ✅ Copie de l'état actuel"
               cp -r "$report_dir/current_state/$SITE_DIR/"* ".seo-history/${SITE_DIR}/" 2>/dev/null || true
+              SITES_UPDATED=$((SITES_UPDATED + 1))
             else
-              # Fallback : créer au minimum le timestamp
+              echo "  ⚠️ État actuel non trouvé, création minimale"
               echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ".seo-history/${SITE_DIR}/.last_check"
             fi
             
-            # Info du site depuis le rapport
-            SITE_NAME=$(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null)
-            SITE_URL=$(jq -r '.url // "Unknown"' "$report_dir/report.json" 2>/dev/null)
-            echo "Site: $SITE_NAME" > ".seo-history/${SITE_DIR}/info.txt"
-            echo "URL: $SITE_URL" >> ".seo-history/${SITE_DIR}/info.txt"
-            echo "Last update: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ".seo-history/${SITE_DIR}/info.txt"
+            # Ajouter métadonnées depuis le rapport
+            if [ -f "$report_dir/report.json" ]; then
+              SITE_NAME=$(jq -r '.site // "Unknown"' "$report_dir/report.json" 2>/dev/null || echo "Unknown")
+              SITE_URL=$(jq -r '.url // "Unknown"' "$report_dir/report.json" 2>/dev/null || echo "Unknown")
+              
+              {
+                echo "Site: $SITE_NAME"
+                echo "URL: $SITE_URL"
+                echo "Last update: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "Run ID: ${{ github.run_id }}"
+              } > ".seo-history/${SITE_DIR}/info.txt"
+            fi
           fi
         done
         
-        echo "Historique préparé, ajout à Git..."
+        echo "📊 $SITES_UPDATED sites mis à jour dans l'historique"
         
-        # Ajouter tous les fichiers d'historique
+        # Ajouter tous les changements à Git
         git add .seo-history/
         
-        # Vérifier s'il y a des changements à committer
+        # Vérifier s'il y a des modifications à committer
         if git diff --staged --quiet; then
-          echo "Aucun changement à committer"
+          echo "ℹ️ Aucun changement à committer"
         else
-          # Commit avec un message horodaté
-          COMMIT_MESSAGE="SEO history update - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Commit: $COMMIT_MESSAGE"
+          # Créer un commit avec un message informatif
+          COMMIT_MESSAGE="SEO Monitor: Update history for $SITES_UPDATED sites - $(date -u '+%Y-%m-%d %H:%M UTC')"
+          echo "📝 Commit: $COMMIT_MESSAGE"
           
           if git commit -m "$COMMIT_MESSAGE"; then
-            echo "Commit local réussi"
+            echo "✅ Commit local réussi"
             
-            # Push avec retry simple
-            MAX_RETRIES=3
+            # Tentative de push avec gestion des conflits
+            echo "🚀 Push vers GitHub..."
+            MAX_RETRIES=5
             for i in $(seq 1 $MAX_RETRIES); do
-              echo "Tentative de push $i/$MAX_RETRIES"
+              echo "Tentative $i/$MAX_RETRIES"
               
-              if git push origin main; then
-                echo "Push successful on attempt $i"
-                echo "Historique SEO sauvegardé avec succès"
+              if git push origin HEAD; then
+                echo "✅ Push réussi!"
                 break
               else
-                echo "Push failed on attempt $i"
+                echo "❌ Push échoué, tentative de résolution..."
                 if [ $i -lt $MAX_RETRIES ]; then
-                  echo "Synchronisation avant retry..."
-                  git pull --rebase origin main || {
-                    echo "Rebase failed, trying merge..."
+                  # Récupérer les dernières modifications
+                  git fetch origin
+                  
+                  # Essayer un rebase
+                  if git rebase origin/$(git branch --show-current); then
+                    echo "✅ Rebase réussi"
+                  else
+                    echo "⚠️ Rebase échoué, tentative de merge"
                     git rebase --abort 2>/dev/null || true
-                    git pull --no-rebase origin main
-                  }
-                  sleep 2
+                    git merge origin/$(git branch --show-current) --no-edit || {
+                      echo "❌ Merge échoué, reset du commit"
+                      git reset --soft HEAD~1
+                      break
+                    }
+                  fi
+                  sleep $((i * 2))
                 else
-                  echo "Push failed after $MAX_RETRIES attempts"
+                  echo "❌ Impossible de pusher après $MAX_RETRIES tentatives"
                   echo "L'historique reste disponible localement"
                 fi
               fi
             done
           else
-            echo "Erreur lors du commit local"
+            echo "❌ Échec du commit local"
           fi
         fi
 
@@ -643,275 +767,451 @@ jobs:
         path: reports/
       continue-on-error: true
     
-    - name: Analyze and prepare notification
+    - name: Analyze results
       id: analyze
       run: |
-        echo "Analyse des rapports..."
+        echo "📊 Analyse des résultats..."
         
         TOTAL="${{ needs.setup.outputs.sites_count }}"
         FIRST_RUN=0
         WITH_CHANGES=0
         WITH_ERRORS=0
+        SUCCESSFUL=0
         NEEDS_EMAIL=false
         
-        if [ ! -d "reports" ]; then
-          echo "Aucun rapport téléchargé, création d'un dossier vide"
-          mkdir -p reports
-        fi
+        # Créer les dossiers de travail
+        mkdir -p reports analysis_output
         
+        # Analyser chaque rapport
         for report_dir in reports/report-*; do
           if [ -d "$report_dir" ] && [ -f "$report_dir/report.json" ]; then
             REPORT=$(cat "$report_dir/report.json")
+            SITE_NAME=$(echo "$REPORT" | jq -r '.site // "Unknown"')
             
-            IS_FIRST=$(echo "$REPORT" | jq -r '.is_first_run')
-            HAS_CHANGES=$(echo "$REPORT" | jq -r '.changes.has_changes')
-            ROBOTS_ERROR=$(echo "$REPORT" | jq -r '.robots.status')
-            SITEMAP_ERROR=$(echo "$REPORT" | jq -r '.sitemaps.status')
+            echo "Analyse: $SITE_NAME"
             
+            # Extraire les informations
+            IS_FIRST=$(echo "$REPORT" | jq -r '.is_first_run // false')
+            HAS_CHANGES=$(echo "$REPORT" | jq -r '.changes.has_changes // false')
+            ROBOTS_ERROR=$(echo "$REPORT" | jq -r '.robots.status // "unknown"')
+            SITEMAP_ERROR=$(echo "$REPORT" | jq -r '.sitemaps.status // "unknown"')
+            NEEDS_ALERT=$(echo "$REPORT" | jq -r '.alert.needs_alert // false')
+            
+            # Comptabiliser
             if [ "$IS_FIRST" = "true" ]; then
               FIRST_RUN=$((FIRST_RUN + 1))
-            elif [ "$HAS_CHANGES" = "true" ]; then
+            fi
+            
+            if [ "$HAS_CHANGES" = "true" ]; then
               WITH_CHANGES=$((WITH_CHANGES + 1))
-              NEEDS_EMAIL=true
             fi
             
             if [ "$ROBOTS_ERROR" = "error" ] || [ "$SITEMAP_ERROR" = "error" ]; then
               WITH_ERRORS=$((WITH_ERRORS + 1))
+            else
+              SUCCESSFUL=$((SUCCESSFUL + 1))
+            fi
+            
+            if [ "$NEEDS_ALERT" = "true" ]; then
               NEEDS_EMAIL=true
             fi
             
+            # Décompresser les changements pour l'email
             if [ -f "$report_dir/changes.tar.gz" ]; then
-              mkdir -p "all_changes/$(basename $report_dir)"
-              tar -xzf "$report_dir/changes.tar.gz" -C "all_changes/$(basename $report_dir)"
+              mkdir -p "analysis_output/changes/$(basename $report_dir)"
+              tar -xzf "$report_dir/changes.tar.gz" -C "analysis_output/changes/$(basename $report_dir)" 2>/dev/null || true
             fi
           fi
         done
         
+        # Forcer l'email si demandé
         if [ "${{ github.event.inputs.force_alert }}" = "true" ]; then
           NEEDS_EMAIL=true
+          echo "🔔 Email forcé par l'utilisateur"
         fi
         
+        # Enregistrer les résultats
+        echo "total=$TOTAL" >> $GITHUB_OUTPUT
         echo "first_run=$FIRST_RUN" >> $GITHUB_OUTPUT
         echo "with_changes=$WITH_CHANGES" >> $GITHUB_OUTPUT
         echo "with_errors=$WITH_ERRORS" >> $GITHUB_OUTPUT
+        echo "successful=$SUCCESSFUL" >> $GITHUB_OUTPUT
         echo "needs_email=$NEEDS_EMAIL" >> $GITHUB_OUTPUT
         
-        echo "# Monitoring SEO - Résumé" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **Sites surveillés:** $TOTAL" >> $GITHUB_STEP_SUMMARY
-        echo "- **Première vérification:** $FIRST_RUN" >> $GITHUB_STEP_SUMMARY
-        echo "- **Avec changements:** $WITH_CHANGES" >> $GITHUB_STEP_SUMMARY
-        echo "- **Avec erreurs:** $WITH_ERRORS" >> $GITHUB_STEP_SUMMARY
+        # Créer un résumé pour GitHub
+        {
+          echo "# 📊 Monitoring SEO - Résumé d'exécution"
+          echo ""
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')"
+          echo "**Repository:** ${{ github.repository }}"
+          echo "**Run ID:** ${{ github.run_id }}"
+          echo ""
+          echo "## 📈 Statistiques"
+          echo "- **Sites surveillés:** $TOTAL"
+          echo "- **Vérifications réussies:** $SUCCESSFUL"
+          echo "- **Premières vérifications:** $FIRST_RUN"
+          echo "- **Sites avec changements:** $WITH_CHANGES"
+          echo "- **Sites avec erreurs:** $WITH_ERRORS"
+          echo "- **Email envoyé:** $([ "$NEEDS_EMAIL" = "true" ] && echo "✅ Oui" || echo "❌ Non")"
+          echo ""
+          if [ $WITH_CHANGES -gt 0 ]; then
+            echo "## 🔄 Sites avec modifications"
+            for report_dir in reports/report-*; do
+              if [ -f "$report_dir/report.json" ]; then
+                REPORT=$(cat "$report_dir/report.json")
+                HAS_CHANGES=$(echo "$REPORT" | jq -r '.changes.has_changes // false')
+                if [ "$HAS_CHANGES" = "true" ]; then
+                  SITE_NAME=$(echo "$REPORT" | jq -r '.site')
+                  SITE_URL=$(echo "$REPORT" | jq -r '.url')
+                  echo "- **$SITE_NAME** ($SITE_URL)"
+                fi
+              fi
+            done
+          fi
+          echo ""
+          if [ $WITH_ERRORS -gt 0 ]; then
+            echo "## ❌ Sites avec erreurs"
+            for report_dir in reports/report-*; do
+              if [ -f "$report_dir/report.json" ]; then
+                REPORT=$(cat "$report_dir/report.json")
+                ROBOTS_ERROR=$(echo "$REPORT" | jq -r '.robots.status')
+                SITEMAP_ERROR=$(echo "$REPORT" | jq -r '.sitemaps.status')
+                if [ "$ROBOTS_ERROR" = "error" ] || [ "$SITEMAP_ERROR" = "error" ]; then
+                  SITE_NAME=$(echo "$REPORT" | jq -r '.site')
+                  echo "- **$SITE_NAME**"
+                fi
+              fi
+            done
+          fi
+        } >> $GITHUB_STEP_SUMMARY
+        
+        echo "📋 Analyse terminée: $SUCCESSFUL/$TOTAL sites OK, $WITH_CHANGES changements, $WITH_ERRORS erreurs"
 
-    - name: Send detailed email
+    - name: Send comprehensive email notification
       if: steps.analyze.outputs.needs_email == 'true'
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_RUN_ID: ${{ github.run_id }}
       run: |
-        python3 << 'PYTHON'
+        python3 << 'PYTHON_SCRIPT'
         import smtplib
         import json
         import os
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
         from datetime import datetime
+        import glob
         
-        print("Préparation de l'email de notification...")
+        print("🔔 Préparation de l'email de notification...")
         
+        # Configuration email
         sender = "${{ env.EMAIL_USERNAME }}"
         password = "${{ env.EMAIL_PASSWORD }}"
         receiver = "${{ env.NOTIFICATION_EMAIL }}"
         
-        total = int("${{ needs.setup.outputs.sites_count }}")
+        # Statistiques
+        total = int("${{ steps.analyze.outputs.total }}")
         first_run = int("${{ steps.analyze.outputs.first_run }}")
         with_changes = int("${{ steps.analyze.outputs.with_changes }}")
         with_errors = int("${{ steps.analyze.outputs.with_errors }}")
+        successful = int("${{ steps.analyze.outputs.successful }}")
         
-        print(f"Statistiques: {total} sites, {first_run} premières exécutions, {with_changes} changements, {with_errors} erreurs")        
+        print(f"📊 Stats: {total} sites, {successful} OK, {with_changes} changements, {with_errors} erreurs")
         
+        # Sujet dynamique
         if with_errors > 0:
-            subject = f"SEO Alert - {with_errors} erreur(s) / {total} sites"
+            if with_changes > 0:
+                subject = f"🚨 SEO Alert - {with_errors} erreur(s) et {with_changes} changement(s) détectés"
+            else:
+                subject = f"🚨 SEO Alert - {with_errors} erreur(s) détectées sur {total} sites"
         elif with_changes > 0:
-            subject = f"SEO Update - {with_changes} changement(s) / {total} sites"
+            subject = f"📝 SEO Update - {with_changes} changement(s) détectés sur {total} sites"
         else:
-            subject = f"SEO Check - {total} sites vérifiés"
+            subject = f"✅ SEO Check - {total} sites vérifiés (test forcé)"
         
+        # Construction de l'email HTML
         html = f"""
+        <!DOCTYPE html>
         <html>
         <head>
+            <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
-                .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
-                .summary {{ background: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 5px; }}
-                .site {{ margin: 20px 0; padding: 15px; border-left: 4px solid #007bff; background: #f9f9f9; }}
-                .site-error {{ border-left-color: #dc3545; background: #f8d7da; }}
-                .site-changed {{ border-left-color: #ffc107; background: #fff3cd; }}
-                .site-new {{ border-left-color: #17a2b8; background: #d1ecf1; }}
-                .changes-detail {{ background: white; padding: 10px; margin: 10px 0; border-radius: 3px; font-family: monospace; font-size: 12px; }}
-                .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.9em; }}
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+                .container {{ max-width: 800px; margin: 0 auto; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow: hidden; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 28px; font-weight: 300; }}
+                .header p {{ margin: 10px 0 0 0; opacity: 0.9; }}
+                .summary {{ background: #f8f9fa; padding: 25px; border-bottom: 1px solid #e9ecef; }}
+                .summary h2 {{ margin: 0 0 15px 0; color: #495057; font-size: 20px; }}
+                .stats {{ display: flex; justify-content: space-between; flex-wrap: wrap; gap: 15px; }}
+                .stat {{ background: white; padding: 15px; border-radius: 8px; text-align: center; flex: 1; min-width: 120px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+                .stat-number {{ font-size: 24px; font-weight: bold; }}
+                .stat-label {{ font-size: 12px; color: #6c757d; text-transform: uppercase; }}
+                .stat.error .stat-number {{ color: #dc3545; }}
+                .stat.warning .stat-number {{ color: #ffc107; }}
+                .stat.success .stat-number {{ color: #28a745; }}
+                .stat.info .stat-number {{ color: #17a2b8; }}
+                
+                .content {{ padding: 25px; }}
+                .site {{ margin: 20px 0; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+                .site-header {{ padding: 15px; color: white; font-weight: bold; display: flex; align-items: center; gap: 10px; }}
+                .site-error .site-header {{ background: #dc3545; }}
+                .site-changed .site-header {{ background: #ffc107; color: #212529; }}
+                .site-new .site-header {{ background: #17a2b8; }}
+                .site-content {{ padding: 20px; background: white; }}
+                .site-url {{ word-break: break-all; margin: 5px 0; }}
+                .site-url a {{ color: #007bff; text-decoration: none; }}
+                .site-url a:hover {{ text-decoration: underline; }}
+                
+                .changes-detail {{ background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 15px; margin: 15px 0; }}
+                .changes-detail h4 {{ margin: 0 0 10px 0; color: #495057; }}
+                .code-block {{ background: #f1f3f4; border-left: 4px solid #007bff; padding: 10px; margin: 10px 0; font-family: 'Courier New', monospace; font-size: 13px; border-radius: 4px; }}
+                .code-add {{ border-left-color: #28a745; background: #f8fff9; }}
+                .code-remove {{ border-left-color: #dc3545; background: #fff8f8; }}
+                
+                .footer {{ background: #f8f9fa; padding: 25px; text-align: center; border-top: 1px solid #e9ecef; }}
+                .footer a {{ color: #007bff; text-decoration: none; }}
+                .footer a:hover {{ text-decoration: underline; }}
+                .footer p {{ margin: 5px 0; color: #6c757d; }}
+                
+                @media (max-width: 600px) {{
+                    .stats {{ flex-direction: column; }}
+                    .stat {{ min-width: auto; }}
+                    .site-header {{ flex-direction: column; align-items: flex-start; gap: 5px; }}
+                }}
             </style>
         </head>
         <body>
-            <div class="header">
-                <h1>Monitoring SEO Multi-Sites</h1>
-                <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
-             <p><strong>Repository:</strong> {os.environ.get('GITHUB_REPOSITORY', 'N/A')}</p>
-            </div>
-            
-            <div class="summary">
-                <h2>Résumé</h2>
-                <ul>
-                    <li><strong>Sites surveillés:</strong> {total}</li>
-                    <li><strong>Première vérification:</strong> {first_run}</li>
-                    <li><strong>Avec changements:</strong> {with_changes}</li>
-                    <li><strong>Avec erreurs:</strong> {with_errors}</li>
-                </ul>
-            </div>
-            
-            <h2>Détails par site</h2>
+            <div class="container">
+                <div class="header">
+                    <h1>🔍 Monitoring SEO Multi-Sites</h1>
+                    <p>Rapport d'exécution du {datetime.now().strftime("%d/%m/%Y à %H:%M UTC")}</p>
+                </div>
+                
+                <div class="summary">
+                    <h2>📊 Résumé d'exécution</h2>
+                    <div class="stats">
+                        <div class="stat info">
+                            <div class="stat-number">{total}</div>
+                            <div class="stat-label">Sites surveillés</div>
+                        </div>
+                        <div class="stat success">
+                            <div class="stat-number">{successful}</div>
+                            <div class="stat-label">Vérifications OK</div>
+                        </div>
+                        <div class="stat warning">
+                            <div class="stat-number">{with_changes}</div>
+                            <div class="stat-label">Avec changements</div>
+                        </div>
+                        <div class="stat error">
+                            <div class="stat-number">{with_errors}</div>
+                            <div class="stat-label">Avec erreurs</div>
+                        </div>
+                        <div class="stat info">
+                            <div class="stat-number">{first_run}</div>
+                            <div class="stat-label">Premières vérifications</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="content">
         """
         
-        if os.path.exists("reports"):
-            for report_dir in os.listdir("reports"):
-                if report_dir.startswith("report-"):
-                    report_path = os.path.join("reports", report_dir, "report.json")
-                    if os.path.exists(report_path):
-                        with open(report_path) as f:
-                            report = json.load(f)
-                        
-                        has_errors = (report['robots']['status'] == 'error' or report['sitemaps']['status'] == 'error')
-                        has_changes = (report['changes']['has_changes'] == True)
-                        is_first_run = report['is_first_run']
-                        
-                        if has_errors or (has_changes and not is_first_run):
-                            if has_errors:
-                                if is_first_run:
-                                    site_class = 'site-error'
-                                    icon = '🚨'
-                                else:
-                                    site_class = 'site-error' 
-                                    icon = '❌'
-                            elif has_changes:
-                                site_class = 'site-changed'
-                                icon = '📝'
-                            
-                            html += f'<div class="{site_class}">'
-                            if is_first_run and has_errors:
-                                html += f'<h3>{icon} {report["site"]} <span style="color: #6c757d; font-size: 0.8em;">(Première vérification)</span></h3>'
-                            else:
-                                html += f'<h3>{icon} {report["site"]}</h3>'
-                            html += f'<p><strong>URL:</strong> <a href="{report["url"]}">{report["url"]}</a></p>'
-                            
-                            if report['robots']['status'] == 'error':
-                                error_msg = report['robots'].get('error', 'Erreur inconnue')
-                                html += f'<p>⚠️ <strong>robots.txt:</strong> {error_msg}</p>'
-                            
-                            if report['sitemaps']['status'] == 'error':
-                                error_msg = report['sitemaps'].get('errors', 'Erreur inconnue')
-                                html += f'<p>⚠️ <strong>sitemaps:</strong> {error_msg}</p>'
-                            
-                            if has_changes and not is_first_run and report['changes']['details']:
-                                html += '<div class="changes-detail">'
-                                html += '<strong>Changements détectés:</strong><br>'
-                                
-                                details = report['changes']['details']
-                                for change in details.split(';'):
-                                    if change:
-                                        parts = change.split(':')
-                                        if len(parts) == 2:
-                                            file_name = parts[0]
-                                            change_info = parts[1]
-                                            
-                                            if 'modified' in change_info and '(' in change_info:
-                                                nums = change_info[change_info.find('(')+1:change_info.find(')')].split('/')
-                                                if len(nums) == 2:
-                                                    added = nums[0].replace('+', '')
-                                                    removed = nums[1].replace('-', '')
-                                                    
-                                                    if file_name == 'robots.txt':
-                                                        html += f'<br>📄 <strong>robots.txt:</strong> '
-                                                        html += f'{added} lignes ajoutées, {removed} lignes supprimées'
-                                                    elif 'sitemap' in file_name:
-                                                        html += f'<br>🗺️ <strong>{file_name}:</strong> '
-                                                        html += f'{added} URLs ajoutées, {removed} URLs supprimées'
-                                
-                                changes_dir = f"all_changes/report-{report['site'].replace(' ', '_').lower()}"
-                                if os.path.exists(changes_dir):
-                                    robots_changes = os.path.join(changes_dir, "robots_changes.txt")
-                                    if os.path.exists(robots_changes):
-                                        with open(robots_changes) as f:
-                                            content = f.read()
-                                            if '=== AJOUTS ===' in content:
-                                                adds = content.split('=== AJOUTS ===')[1].split('=== SUPPRESSIONS ===')[0].strip()
-                                                if adds:
-                                                    html += '<br><br><strong>Lignes ajoutées dans robots.txt:</strong><br>'
-                                                    for line in adds.split('\n')[:5]:
-                                                        if line.strip():
-                                                            html += f'<code>+ {line.strip()}</code><br>'
-                                            
-                                            if '=== SUPPRESSIONS ===' in content:
-                                                dels = content.split('=== SUPPRESSIONS ===')[1].strip()
-                                                if dels:
-                                                    html += '<br><strong>Lignes supprimées dans robots.txt:</strong><br>'
-                                                    for line in dels.split('\n')[:5]:
-                                                        if line.strip():
-                                                            html += f'<code>- {line.strip()}</code><br>'
-                                    
-                                    for sitemap_changes in os.listdir(changes_dir):
-                                        if sitemap_changes.endswith('_changes.txt') and 'sitemap' in sitemap_changes:
-                                            with open(os.path.join(changes_dir, sitemap_changes)) as f:
-                                                content = f.read()
-                                                if '=== NOUVELLES URLS ===' in content:
-                                                    urls = content.split('=== NOUVELLES URLS ===')[1].split('===')[0].strip()
-                                                    if urls:
-                                                        sitemap_name = sitemap_changes.replace('_changes.txt', '').replace('sitemap_', '')
-                                                        html += f'<br><strong>Nouvelles URLs dans {sitemap_name}:</strong><br>'
-                                                        for url in urls.split('\n')[:3]:
-                                                            if url.strip():
-                                                                html += f'<code>+ {url.strip()}</code><br>'
-                                
-                                html += '</div>'
-                            
-                            html += '</div>'
-                            
-            if (with_errors > 0 or with_changes > 0) and '</div>' not in html.split('<h2>Détails par site</h2>')[-1]:
-                html += '<p><em>Détails en cours d\'analyse ou non disponibles pour cette exécution.</em></p>'
-        else:
-            html += '<p><em>Aucun rapport disponible pour cette exécution.</em></p>'
+        # Ajouter les détails des sites avec problèmes ou changements
+        sites_to_show = []
         
-        html += f"""
-            <div class="footer">
-                <p>
-                    <strong>Actions GitHub:</strong> 
-                   <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}">
-                        Voir les détails complets
-                    </a>
-                </p>
-                <p>Prochaine vérification automatique dans 12 heures</p>
-                <p><em>Pour désactiver les notifications, modifiez le workflow dans GitHub</em></p>
+        if os.path.exists("reports"):
+            for report_file in glob.glob("reports/report-*/report.json"):
+                try:
+                    with open(report_file, 'r') as f:
+                        report = json.load(f)
+                    
+                    has_errors = (report.get('robots', {}).get('status') == 'error' or 
+                                 report.get('sitemaps', {}).get('status') == 'error')
+                    has_changes = report.get('changes', {}).get('has_changes', False)
+                    is_first_run = report.get('is_first_run', False)
+                    
+                    # Afficher les sites avec erreurs ou changements (mais pas les premières exécutions avec changements)
+                    if has_errors or (has_changes and not is_first_run):
+                        sites_to_show.append((report, has_errors, has_changes, is_first_run))
+                        
+                except Exception as e:
+                    print(f"Erreur lecture rapport {report_file}: {e}")
+        
+        if sites_to_show:
+            html += "<h2>🎯 Sites nécessitant une attention</h2>"
+            
+            for report, has_errors, has_changes, is_first_run in sites_to_show:
+                site_name = report.get('site', 'Unknown')
+                site_url = report.get('url', '#')
+                
+                # Déterminer le type et l'icône
+                if has_errors:
+                    site_class = 'site-error'
+                    icon = '🚨' if not is_first_run else '⚠️'
+                    status_text = 'ERREUR DÉTECTÉE'
+                elif has_changes:
+                    site_class = 'site-changed'
+                    icon = '📝'
+                    status_text = 'CHANGEMENTS DÉTECTÉS'
+                else:
+                    continue
+                
+                html += f'''
+                <div class="site {site_class}">
+                    <div class="site-header">
+                        <span style="font-size: 20px;">{icon}</span>
+                        <div>
+                            <div>{site_name}</div>
+                            <div style="font-size: 12px; opacity: 0.8;">{status_text}</div>
+                        </div>
+                    </div>
+                    <div class="site-content">
+                        <div class="site-url">
+                            <strong>URL:</strong> <a href="{site_url}" target="_blank">{site_url}</a>
+                        </div>
+                '''
+                
+                # Détails des erreurs
+                robots_status = report.get('robots', {})
+                sitemaps_status = report.get('sitemaps', {})
+                
+                if robots_status.get('status') == 'error':
+                    error_msg = robots_status.get('error', 'Erreur inconnue')
+                    html += f'<p><strong>❌ robots.txt:</strong> {error_msg}</p>'
+                
+                if sitemaps_status.get('status') == 'error':
+                    error_msg = sitemaps_status.get('errors', 'Erreur inconnue')
+                    html += f'<p><strong>❌ Sitemaps:</strong> {error_msg}</p>'
+                
+                # Détails des changements
+                if has_changes and not is_first_run:
+                    changes = report.get('changes', {})
+                    robots_changed = changes.get('robots_changed', False)
+                    sitemaps_changed = changes.get('sitemaps_changed', False)
+                    
+                    if robots_changed or sitemaps_changed:
+                        html += '<div class="changes-detail">'
+                        html += '<h4>🔄 Changements détectés:</h4>'
+                        
+                        # Robots.txt changes
+                        if robots_changed:
+                            robots_details = report.get('robots', {}).get('details', '')
+                            html += f'<p><strong>📄 robots.txt:</strong> {robots_details}</p>'
+                            
+                            # Chercher les détails dans les fichiers de changements
+                            report_dir = os.path.dirname(report_file).replace('reports/', 'analysis_output/changes/')
+                            robots_changes_file = os.path.join(report_dir, 'robots_changes.txt')
+                            
+                            if os.path.exists(robots_changes_file):
+                                try:
+                                    with open(robots_changes_file, 'r') as f:
+                                        content = f.read()
+                                    
+                                    # Extraire les ajouts
+                                    if '=== AJOUTS ===' in content:
+                                        adds_section = content.split('=== AJOUTS ===')[1].split('===')[0].strip()
+                                        if adds_section:
+                                            html += '<div class="code-block code-add">'
+                                            html += '<strong>Lignes ajoutées:</strong><br>'
+                                            for line in adds_section.split('\n')[:5]:  # Max 5 lignes
+                                                if line.strip():
+                                                    html += f'+ {line.strip()}<br>'
+                                            html += '</div>'
+                                    
+                                    # Extraire les suppressions
+                                    if '=== SUPPRESSIONS ===' in content:
+                                        dels_section = content.split('=== SUPPRESSIONS ===')[1].strip()
+                                        if dels_section:
+                                            html += '<div class="code-block code-remove">'
+                                            html += '<strong>Lignes supprimées:</strong><br>'
+                                            for line in dels_section.split('\n')[:5]:  # Max 5 lignes
+                                                if line.strip():
+                                                    html += f'- {line.strip()}<br>'
+                                            html += '</div>'
+                                except Exception as e:
+                                    print(f"Erreur lecture robots_changes.txt: {e}")
+                        
+                        # Sitemap changes
+                        if sitemaps_changed:
+                            sitemaps_details = report.get('sitemaps', {}).get('details', '')
+                            html += f'<p><strong>🗺️ Sitemaps:</strong> {sitemaps_details}</p>'
+                            
+                            # Chercher les détails des sitemaps
+                            report_dir = os.path.dirname(report_file).replace('reports/', 'analysis_output/changes/')
+                            if os.path.exists(report_dir):
+                                sitemap_files = glob.glob(os.path.join(report_dir, '*sitemap*_changes.txt'))
+                                for sitemap_file in sitemap_files[:2]:  # Max 2 sitemaps
+                                    try:
+                                        with open(sitemap_file, 'r') as f:
+                                            content = f.read()
+                                        
+                                        sitemap_name = os.path.basename(sitemap_file).replace('_changes.txt', '')
+                                        
+                                        if '=== NOUVELLES URLS ===' in content:
+                                            urls_section = content.split('=== NOUVELLES URLS ===')[1].split('===')[0].strip()
+                                            if urls_section:
+                                                html += f'<div class="code-block code-add">'
+                                                html += f'<strong>Nouvelles URLs - {sitemap_name}:</strong><br>'
+                                                for url in urls_section.split('\n')[:3]:  # Max 3 URLs
+                                                    if url.strip():
+                                                        html += f'+ {url.strip()}<br>'
+                                                html += '</div>'
+                                                
+                                    except Exception as e:
+                                        print(f"Erreur lecture {sitemap_file}: {e}")
+                        
+                        html += '</div>'
+                
+                html += '</div></div>'
+        else:
+            html += '<h2>✅ Aucun problème détecté</h2>'
+            html += '<p>Tous les sites surveillés fonctionnent correctement. Cet email a été envoyé car l\'envoi a été forcé manuellement.</p>'
+        
+        # Footer
+        github_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
+        html += f'''
+                </div>
+                
+                <div class="footer">
+                    <p><strong>🔗 Liens utiles:</strong></p>
+                    <p>
+                        <a href="{github_url}" target="_blank">📋 Voir les détails complets sur GitHub Actions</a>
+                    </p>
+                    <p>📅 Prochaine vérification automatique dans 12 heures</p>
+                    <p style="font-size: 12px; margin-top: 15px;">
+                        💡 Pour désactiver ces notifications, modifiez le workflow dans votre repository GitHub<br>
+                        🤖 Email généré automatiquement par GitHub Actions
+                    </p>
+                </div>
             </div>
         </body>
         </html>
-        """
+        '''
         
-        print("Envoi de l'email...")
-        message = MIMEMultipart()
-        message["Subject"] = subject
-        message["From"] = sender
-        message["To"] = receiver
-        message.attach(MIMEText(html, "html"))
+        # Envoi de l'email
+        print(f"📧 Envoi de l'email...")
+        print(f"   De: {sender}")
+        print(f"   À: {receiver}")
+        print(f"   Sujet: {subject}")
         
         try:
-            server = smtplib.SMTP('smtp.gmail.com', 587)
-            server.starttls()
-            server.login(sender, password)
-            server.sendmail(sender, receiver, message.as_string())
-            server.quit()
-            print(f"Email envoyé à {receiver}")
-            print(f"   Sujet: {subject}")
+            message = MIMEMultipart()
+            message["Subject"] = subject
+            message["From"] = sender
+            message["To"] = receiver
+            message.attach(MIMEText(html, "html", "utf-8"))
+            
+            # Connexion et envoi
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(sender, password)
+                server.sendmail(sender, receiver, message.as_string())
+            
+            print("✅ Email envoyé avec succès!")
+            
         except Exception as e:
-            print(f"Erreur envoi email: {e}")
+            print(f"❌ Erreur lors de l'envoi de l'email: {e}")
             exit(1)
-        PYTHON
-        echo "
+        
+        PYTHON_SCRIPT

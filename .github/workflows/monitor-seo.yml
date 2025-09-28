@@ -378,13 +378,22 @@ jobs:
             FILE_SIZE=$(wc -c < "data/${SAFE_NAME}/sitemap_${FILENAME}.xml")
             echo "    ✅ OK: ${FILE_SIZE} bytes"
             
-            # Vérifier si c'est un XML valide
-            if xmllint --noout "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null; then
-              # Compter les URLs pour les sitemaps normaux
-              URL_COUNT=$(grep -o '<loc>' "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null | wc -l || echo 0)
-              echo "    📊 URLs trouvées: $URL_COUNT"
+            # Vérification XML basique sans xmllint
+            if head -1 "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" | grep -q "<?xml" && \
+               grep -q "</urlset>\|</sitemapindex>" "data/${SAFE_NAME}/sitemap_${FILENAME}.xml"; then
+              # Compter les URLs/sitemaps
+              URL_COUNT=$(grep -c "<loc>" "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null || echo 0)
+              SITEMAP_COUNT=$(grep -c "<sitemap>" "data/${SAFE_NAME}/sitemap_${FILENAME}.xml" 2>/dev/null || echo 0)
+              
+              if [ $URL_COUNT -gt 0 ]; then
+                echo "    📊 URLs trouvées: $URL_COUNT"
+              elif [ $SITEMAP_COUNT -gt 0 ]; then
+                echo "    📊 Sitemaps trouvés: $SITEMAP_COUNT"
+              else
+                echo "    📊 Contenu XML détecté"
+              fi
             else
-              echo "    ⚠️ Fichier XML non valide"
+              echo "    ⚠️ Format XML non reconnu (mais fichier téléchargé)"
             fi
           else
             echo "    ❌ Erreur HTTP $HTTP_STATUS"
